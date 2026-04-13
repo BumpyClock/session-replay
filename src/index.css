@@ -1083,10 +1083,48 @@ small {
   font-size: var(--font-size-4);
 }
 
+.session-sidebar__notice {
+  margin: 0 var(--space-4) var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 22%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning-soft) 70%, var(--color-surface-solid));
+  color: var(--color-text-muted);
+  font-size: var(--font-size-3);
+}
+
 .session-sidebar__group-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.session-sidebar__group-trigger {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-sidebar__group-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  outline-offset: 4px;
+}
+
+.session-sidebar__group-chevron {
+  transition: transform var(--motion-fast) var(--ease-hover);
+}
+
+.session-sidebar__group-trigger[aria-expanded='false'] .session-sidebar__group-chevron {
+  transform: rotate(-90deg);
 }
 
 .session-sidebar__session-title {

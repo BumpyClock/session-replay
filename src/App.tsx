@@ -11,7 +11,13 @@ import {
   materializeReplaySession,
   useEditorStore,
 } from './lib/editor'
-import type { MaterializedReplaySession, ReplayRole, SessionRef } from './lib/api/contracts'
+import type {
+  MaterializedReplaySession,
+  ReplayRole,
+  SessionCatalogStatus,
+  SessionRef,
+} from './lib/api/contracts'
+import type { SessionWarning } from './lib/session'
 import { renderReplayTurnBodyHtml } from './lib/markdown'
 import { Button } from './components/ui/button'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
@@ -119,11 +125,31 @@ function resolveApiClient() {
   return createApiClient(baseUrl)
 }
 
+function formatCatalogNotice(warnings: readonly SessionWarning[]): string | null {
+  if (warnings.length === 0) {
+    return null
+  }
+
+  const label = warnings.length === 1 ? 'session was' : 'sessions were'
+  return `${warnings.length} ${label} skipped during catalog refresh. Check console for paths.`
+}
+
+function formatCatalogSummary(status: SessionCatalogStatus | null, sessionCount: number): string {
+  if (!status || status.state === 'ready') {
+    return `${sessionCount} sessions loaded`
+  }
+
+  const verb = status.state === 'refreshing' ? 'refreshing' : 'indexing'
+  return `${sessionCount} sessions loaded · ${verb} ${status.indexedCount}/${status.discoveredCount}`
+}
+
 const apiClient = resolveApiClient()
 
 function App() {
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [catalogStatus, setCatalogStatus] = useState<SessionCatalogStatus | null>(null)
   const [searchText, setSearchText] = useState('')
+  const [catalogWarnings, setCatalogWarnings] = useState<SessionWarning[]>([])
   const [sessions, setSessions] = useState<SessionRef[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(true)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
@@ -168,10 +194,18 @@ function App() {
     setSessionsError(null)
     try {
       const response = await apiClient.listSessions()
+      setCatalogStatus(response.catalog ?? null)
       setSessions(response.sessions)
+      const nextWarnings = response.warnings ?? []
+      setCatalogWarnings(nextWarnings)
+      if (nextWarnings.length > 0) {
+        console.warn('[catalog] skipped sessions during refresh', nextWarnings)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load sessions'
       setSessionsError(message)
+      setCatalogStatus(null)
+      setCatalogWarnings([])
       setSessions([])
     } finally {
       setSessionsLoading(false)
@@ -179,6 +213,11 @@ function App() {
   }, [])
 
   const visibleSessions = useMemo(() => makeBrowserRows(sessions, searchText), [searchText, sessions])
+  const catalogNotice = useMemo(() => formatCatalogNotice(catalogWarnings), [catalogWarnings])
+  const catalogSummary = useMemo(
+    () => formatCatalogSummary(catalogStatus, sessions.length),
+    [catalogStatus, sessions.length],
+  )
 
   const baseRevision = loadedSession
     ? getSessionBaseRevision({
@@ -408,6 +447,8 @@ function App() {
             onRefresh={handleRefresh}
             loading={sessionsLoading}
             error={sessionsError}
+            notice={catalogNotice}
+            summaryText={catalogSummary}
             emptyMessage={searchText ? 'No sessions match your query' : 'No sessions found'}
           />
         </Sidebar>

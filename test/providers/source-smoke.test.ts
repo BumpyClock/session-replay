@@ -133,6 +133,13 @@ describe('createSessionSource', () => {
     await expect(sessionSource.loadSession({ path: codexSession.path })).resolves.toMatchObject(
       codexLoadedSession,
     )
+    expect(sessionSource.getCatalogStatus()).toEqual(
+      expect.objectContaining({
+        discoveredCount: 2,
+        pendingCount: 0,
+        state: 'ready',
+      }),
+    )
 
     expect(moduleLoader).toHaveBeenCalledTimes(3)
     expect(codexProvider.load).toHaveBeenCalledTimes(1)

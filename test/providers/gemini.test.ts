@@ -23,7 +23,11 @@ describe('gemini provider', () => {
               {
                 type: 'user',
                 timestamp: '2026-04-12T12:00:00.000Z',
-                content: 'Run a failing command',
+                content: [
+                  {
+                    text: 'Run a failing command',
+                  },
+                ],
               },
               {
                 type: 'gemini',

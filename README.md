@@ -18,7 +18,9 @@ This repository ships a Vite + React 19 editor with a local API server in the sa
 ## Contracts (setup only)
 
 - Backend path contract is expected at `/api` and forwarded to `SESSION_REPLAY_API_URL` (default `http://127.0.0.1:4848`).
-- Vite dev mode reuses an already-running API if `/api/sessions` responds; otherwise it starts and manages the local API process automatically.
+- Vite dev mode reuses an already-running API if `/api/health` responds; otherwise it starts and manages the local API process automatically.
+- `/api/health` stays cheap so dev startup is not blocked by initial session catalog scans.
+- Session discovery degrades per provider/file: `/api/sessions` can return partial results plus `warnings` when some session files fail to scan or index.
 - Client-side editing stack includes `zustand` and `zod` and is intended to keep edits local.
 - UI baseline prepared for shadcn with Lucide icons (`components.json`).
 

@@ -1,9 +1,12 @@
 import { homedir } from 'node:os'
-import { toMaterializedReplaySession } from '../../src/lib/session'
 import type {
   MaterializedReplaySession,
+  SessionCatalogStatus,
+  SessionLoadRequest,
   SessionRef as ApiSessionRef,
+  SessionSearchRequest,
 } from '../../src/lib/api/contracts'
+import { toMaterializedReplaySession } from '../../src/lib/session'
 import { createClaudeCodeProvider } from '../providers/claude-code'
 import { createCodexProvider } from '../providers/codex-provider'
 import { createCopilotProvider } from '../providers/copilot'
@@ -27,7 +30,6 @@ import type {
   SessionSearchDoc,
   SessionWarning,
 } from './types'
-import type { SessionLoadRequest, SessionSearchRequest } from '../../src/lib/api/contracts'
 
 interface SessionProviderFactoryModule {
   createSessionProvider?: (
@@ -53,7 +55,9 @@ export interface ProviderDescriptor {
 }
 
 export interface SessionSource {
+  getCatalogStatus(): SessionCatalogStatus
   listSessions(): Promise<readonly ApiSessionRef[]>
+  listCatalogWarnings?(): readonly SessionWarning[]
   refreshSessions(): Promise<readonly ApiSessionRef[]>
   loadSession(request: Readonly<SessionLoadRequest>): Promise<MaterializedReplaySession>
   searchSessions(request: Readonly<SessionSearchRequest>): Promise<readonly ApiSessionRef[]>
@@ -64,35 +68,39 @@ export function createSessionCatalogService({
   homeDirectory = homedir(),
   moduleLoader,
 }: CreateSessionCatalogServiceOptions = {}): SessionSource {
+  let catalog: SessionCatalogService | null = null
   const providersPromise = descriptors
     ? loadSessionProvidersFromDescriptors(descriptors, homeDirectory, moduleLoader)
     : Promise.resolve(createDefaultSessionProviders())
-  const catalogPromise = providersPromise.then(
-    (providers) => new SessionCatalogService({ homeDir: homeDirectory, providers }),
-  )
+  const catalogPromise = providersPromise.then((providers) => {
+    catalog = new SessionCatalogService({ homeDir: homeDirectory, providers })
+    return catalog
+  })
 
   const listSessions = async (): Promise<readonly ApiSessionRef[]> => {
-    const catalog = await catalogPromise
-    const refs = await catalog.listSessions()
+    const loadedCatalog = await catalogPromise
+    const refs = await loadedCatalog.listSessions()
     return refs.map(toApiRef)
   }
 
   return {
+    getCatalogStatus: () => catalog?.getCatalogStatus() ?? createEmptyCatalogStatus(),
     listSessions,
+    listCatalogWarnings: () => catalog?.listCatalogWarnings() ?? [],
     refreshSessions: async () => {
-      const catalog = await catalogPromise
-      await catalog.refresh()
-      const refs = await catalog.listSessions()
+      const loadedCatalog = await catalogPromise
+      await loadedCatalog.refresh()
+      const refs = await loadedCatalog.listSessions()
       return refs.map(toApiRef)
     },
     loadSession: async (request) => {
-      const catalog = await catalogPromise
-      const session = await catalog.loadSession(request)
+      const loadedCatalog = await catalogPromise
+      const session = await loadedCatalog.loadSession(request)
       return toMaterializedReplaySession(session)
     },
     searchSessions: async (request) => {
-      const catalog = await catalogPromise
-      const refs = await catalog.searchSessions(request)
+      const loadedCatalog = await catalogPromise
+      const refs = await loadedCatalog.searchSessions(request)
       return refs.map(toApiRef)
     },
   }
@@ -215,4 +223,15 @@ async function pickSessionProvider(
   }
 
   return null
+}
+
+function createEmptyCatalogStatus(): SessionCatalogStatus {
+  return {
+    discoveredCount: 0,
+    indexedCount: 0,
+    pendingCount: 0,
+    snapshotAt: new Date(0).toISOString(),
+    stale: false,
+    state: 'ready',
+  }
 }

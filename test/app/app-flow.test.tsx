@@ -116,4 +116,47 @@ it('loads a session, renders preview state, and exports html', async () => {
     await user.click(screen.getByRole('button', { name: /Generate one-file html/i }))
     await waitFor(() => expect(exportSessionDocumentMock).toHaveBeenCalledTimes(1))
   }, 15000)
+
+  it('shows a non-fatal catalog warning when some sessions are skipped', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [],
+      warnings: [
+        {
+          code: 'catalog_index_failed',
+          filePath: '/tmp/broken.json',
+          message: 'Failed to index gemini session',
+        },
+      ],
+    })
+
+    const { default: App } = await import('../../src/App')
+
+    render(<App />)
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
+    expect(
+      await screen.findByText(/1 session was skipped during catalog refresh/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows catalog indexing progress in the sidebar summary', async () => {
+    listSessionsMock.mockResolvedValue({
+      catalog: {
+        discoveredCount: 10,
+        indexedCount: 3,
+        pendingCount: 7,
+        snapshotAt: '2026-04-13T10:00:00.000Z',
+        stale: false,
+        state: 'indexing',
+      },
+      sessions: [],
+    })
+
+    const { default: App } = await import('../../src/App')
+
+    render(<App />)
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/0 sessions loaded · indexing 3\/10/i)).toBeInTheDocument()
+  })
 })

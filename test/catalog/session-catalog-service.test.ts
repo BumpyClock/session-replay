@@ -47,7 +47,7 @@ describe('SessionCatalogService', () => {
     expect(provider.load).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps catalog empty after failed first refresh and retries successfully', async () => {
+  it('keeps catalog available when first indexing pass skips a broken file', async () => {
     const file = createFile('copilot:alpha/events.jsonl')
     const session = createSession(file, { title: 'Recovered session' })
     const indexed = createIndexedEntry(file, session, {
@@ -74,21 +74,36 @@ describe('SessionCatalogService', () => {
       providers: [provider],
     })
 
-    await expect(service.listSessions()).rejects.toThrow('index failed')
+    await expect(service.listSessions()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'copilot:alpha/events.jsonl',
+        path: file.path,
+        source: 'copilot',
+        title: 'events',
+      }),
+    ])
 
     const state = service as unknown as {
+      catalogWarnings: Array<{ code: string }>
       fileIndex: Map<string, SessionFileRef>
       initialized: boolean
       sessionIndex: Map<string, IndexedSessionEntry>
     }
-    expect(state.initialized).toBe(false)
-    expect(state.fileIndex.size).toBe(0)
+    expect(state.initialized).toBe(true)
+    expect(state.catalogWarnings).toEqual([
+      expect.objectContaining({ code: 'catalog_index_failed' }),
+    ])
+    expect(state.fileIndex.size).toBe(1)
     expect(state.sessionIndex.size).toBe(0)
 
     shouldFail = false
 
-    await expect(service.listSessions()).resolves.toEqual([indexed.ref])
+    await expect(service.refresh()).resolves.toBeUndefined()
+    await vi.waitFor(async () => {
+      await expect(service.listSessions()).resolves.toEqual([indexed.ref])
+    })
     await expect(service.loadSession({ path: file.path })).resolves.toEqual(session)
+    expect(service.listCatalogWarnings()).toEqual([])
 
     expect(provider.scan).toHaveBeenCalledTimes(2)
     expect(provider.index).toHaveBeenCalledTimes(2)
@@ -124,7 +139,7 @@ describe('SessionCatalogService', () => {
     expect(provider.load).toHaveBeenCalledTimes(1)
   })
 
-  it('does not commit changed or deleted entries when refresh fails', async () => {
+  it('commits healthy changes and deletes broken entries while recording warnings', async () => {
     const alphaV1 = createFile('copilot:alpha/events.jsonl', { mtimeMs: 10, size: 20 })
     const betaV1 = createFile('copilot:beta/events.jsonl', { mtimeMs: 11, size: 20 })
     const alphaV2 = createFile('copilot:alpha/events.jsonl', { mtimeMs: 20, size: 25 })
@@ -196,31 +211,141 @@ describe('SessionCatalogService', () => {
     await expect(service.listSessions()).resolves.toEqual([alphaEntryV1.ref, betaEntryV1.ref])
 
     phase = 'refresh-fail'
-    await expect(service.refresh()).rejects.toThrow('refresh failed')
+    await expect(service.refresh()).resolves.toBeUndefined()
 
-    await expect(service.listSessions()).resolves.toEqual([alphaEntryV1.ref, betaEntryV1.ref])
+    await expect(service.listSessions()).resolves.toEqual([alphaEntryV1.ref])
     await expect(service.searchSessions({ query: 'alpha new' })).resolves.toEqual([])
-    await expect(service.searchSessions({ query: 'beta old' })).resolves.toEqual([betaEntryV1.ref])
+    await expect(service.searchSessions({ query: 'beta old' })).resolves.toEqual([])
+    expect(service.listCatalogWarnings()).toEqual([
+      expect.objectContaining({
+        code: 'catalog_index_failed',
+        filePath: alphaV2.path,
+      }),
+    ])
 
     const failedState = service as unknown as {
       fileIndex: Map<string, SessionFileRef>
+      sessionRefIndex: Map<string, { ref?: { title?: string }; title?: string }>
       sessionIndex: Map<string, IndexedSessionEntry>
     }
-    expect(failedState.fileIndex.get(alphaV1.path)?.fingerprint.mtimeMs).toBe(10)
-    expect(failedState.fileIndex.has(betaV1.path)).toBe(true)
-    expect(failedState.sessionIndex.get(alphaV1.path)?.ref.title).toBe('Alpha old')
+    expect(failedState.fileIndex.has(alphaV1.path)).toBe(true)
+    expect(failedState.fileIndex.has(betaV1.path)).toBe(false)
+    expect(failedState.sessionIndex.size).toBe(0)
+    expect(failedState.sessionRefIndex.get(alphaV1.path)?.title).toBe('Alpha old')
 
     phase = 'refresh-success'
     await expect(service.refresh()).resolves.toBeUndefined()
     await expect(service.listSessions()).resolves.toEqual([alphaEntryV2.ref])
     await expect(service.searchSessions({ query: 'alpha new' })).resolves.toEqual([alphaEntryV2.ref])
     await expect(service.searchSessions({ query: 'beta old' })).resolves.toEqual([])
+    expect(service.listCatalogWarnings()).toEqual([])
 
     const successState = service as unknown as {
       fileIndex: Map<string, SessionFileRef>
     }
     expect(successState.fileIndex.get(alphaV2.path)?.fingerprint.mtimeMs).toBe(20)
     expect(successState.fileIndex.has(betaV1.path)).toBe(false)
+  })
+
+  it('keeps previous provider state when scanning one provider fails', async () => {
+    const stableFile = createFile('copilot:stable/events.jsonl')
+    const stableSession = createSession(stableFile, {
+      project: 'stable',
+      title: 'Stable session',
+    })
+    const stableEntry = createIndexedEntry(stableFile, stableSession, {
+      metadataText: 'stable session',
+      transcriptText: 'stable transcript',
+    })
+
+    let shouldFailScan = false
+    const provider: SessionCatalogProvider = {
+      source: 'copilot',
+      scan: vi.fn(async () => {
+        if (shouldFailScan) {
+          throw new Error('scan failed')
+        }
+
+        return [stableFile]
+      }),
+      index: vi.fn(async () => stableEntry),
+      load: vi.fn(async () => stableSession),
+    }
+
+    const service = new SessionCatalogService({
+      homeDir: '/tmp',
+      providers: [provider],
+    })
+
+    await expect(service.listSessions()).resolves.toEqual([stableEntry.ref])
+
+    shouldFailScan = true
+
+    await expect(service.refresh()).resolves.toBeUndefined()
+    await expect(service.listSessions()).resolves.toEqual([stableEntry.ref])
+    expect(service.listCatalogWarnings()).toEqual([
+      expect.objectContaining({ code: 'catalog_scan_failed' }),
+    ])
+  })
+
+  it('returns discovered placeholders before background indexing completes', async () => {
+    const file = createFile('copilot:alpha/events.jsonl', { mtimeMs: 40 })
+    const session = createSession(file, { title: 'Indexed alpha', project: 'alpha' })
+    const indexed = createIndexedEntry(file, session, {
+      metadataText: 'indexed alpha',
+      transcriptText: 'indexed alpha transcript',
+    })
+
+    let resolveIndex: ((value: IndexedSessionEntry) => void) | null = null
+    const provider: SessionCatalogProvider = {
+      source: 'copilot',
+      scan: vi.fn(async () => [file]),
+      index: vi.fn(
+        () =>
+          new Promise<IndexedSessionEntry>((resolve) => {
+            resolveIndex = resolve
+          }),
+      ),
+      load: vi.fn(async () => session),
+    }
+
+    const service = new SessionCatalogService({
+      homeDir: '/tmp',
+      providers: [provider],
+    })
+
+    const sessions = await service.listSessions()
+
+    expect(sessions).toEqual([
+      expect.objectContaining({
+        id: 'copilot:alpha/events.jsonl',
+        path: file.path,
+        source: 'copilot',
+        title: 'events',
+      }),
+    ])
+    expect(service.getCatalogStatus()).toEqual(
+      expect.objectContaining({
+        discoveredCount: 1,
+        indexedCount: 0,
+        pendingCount: 1,
+        state: 'indexing',
+      }),
+    )
+    await expect(service.loadSession({ path: file.path })).resolves.toEqual(session)
+
+    resolveIndex?.(indexed)
+    await vi.waitFor(async () => {
+      await expect(service.listSessions()).resolves.toEqual([indexed.ref])
+      expect(service.getCatalogStatus()).toEqual(
+        expect.objectContaining({
+          discoveredCount: 1,
+          indexedCount: 1,
+          pendingCount: 0,
+          state: 'ready',
+        }),
+      )
+    })
   })
 })
 

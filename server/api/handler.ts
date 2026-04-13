@@ -11,6 +11,7 @@ import type {
 import { renderReplayDocument, sanitizeDownloadName } from '../export/render-replay-document'
 import { ApiError } from './errors'
 import { createCorsHeaders, errorResponse, jsonResponse, readJsonBody } from './http'
+import { API_HEALTH_PATH, API_SESSIONS_PATH, API_SESSIONS_REFRESH_PATH } from './routes'
 import { assertLocalRequest, assertPathInsideHome } from './security'
 import { createEmptySessionSource, type SessionSource } from './session-source'
 
@@ -45,18 +46,21 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
 
       const { pathname } = new URL(request.url)
 
-      if (request.method === 'GET' && pathname === '/api/sessions') {
-        const response: SessionListResponse = {
-          sessions: [...(await sessionSource.listSessions())],
-        }
+      if ((request.method === 'GET' || request.method === 'HEAD') && pathname === API_HEALTH_PATH) {
+        return new Response(null, {
+          headers: corsHeaders,
+          status: 204,
+        })
+      }
+
+      if (request.method === 'GET' && pathname === API_SESSIONS_PATH) {
+        const response = createSessionListResponse(sessionSource, await sessionSource.listSessions())
 
         return jsonResponse(response, { status: 200 }, corsHeaders)
       }
 
-      if (request.method === 'POST' && pathname === '/api/sessions/refresh') {
-        const response: SessionListResponse = {
-          sessions: [...(await sessionSource.refreshSessions())],
-        }
+      if (request.method === 'POST' && pathname === API_SESSIONS_REFRESH_PATH) {
+        const response = createSessionListResponse(sessionSource, await sessionSource.refreshSessions())
 
         return jsonResponse(response, { status: 200 }, corsHeaders)
       }
@@ -126,6 +130,32 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
   }
 }
 
+function createSessionListResponse(
+  sessionSource: SessionSource,
+  sessions: SessionListResponse['sessions'],
+): SessionListResponse {
+  const catalog = sessionSource.getCatalogStatus?.()
+  const warnings = sessionSource.listCatalogWarnings?.() ?? []
+
+  const response: SessionListResponse = {
+    sessions: [...sessions],
+  }
+
+  if (catalog) {
+    response.catalog = catalog
+  }
+
+  if (warnings.length > 0) {
+    response.warnings = [...warnings]
+  }
+
+  return response
+}
+
+/**
+ * Accepts either a session id or an explicit path and rejects paths outside the
+ * user home directory before provider load logic runs.
+ */
 function normalizeLoadRequest(
   body: SessionLoadRequest,
   homeDirectory: string,

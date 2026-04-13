@@ -43,7 +43,7 @@ export function assertPathInsideHome(pathValue: string, homeDirectory = homedir(
   const expandedPath = pathValue.startsWith('~')
     ? resolve(homeDirectory, pathValue.slice(1))
     : resolve(pathValue)
-  const safeHomePath = toComparablePath(resolve(homeDirectory))
+  const safeHomePath = toComparablePath(expandIfExists(resolve(homeDirectory)))
   const safeCandidatePath = toComparablePath(expandIfExists(expandedPath))
 
   if (

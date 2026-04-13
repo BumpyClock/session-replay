@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import process from 'node:process'
 import type { Plugin } from 'vite'
+import { API_HEALTH_PATH } from '../server/api/routes'
 
 const API_READY_TIMEOUT_MS = 30_000
 const API_READY_POLL_MS = 300
@@ -87,7 +88,7 @@ async function waitForApiReady(healthUrl: string, child?: ChildProcess): Promise
 }
 
 async function ensureApiState(apiBaseUrl: string): Promise<ApiState> {
-  const healthUrl = new URL('/api/sessions', apiBaseUrl).toString()
+  const healthUrl = new URL(API_HEALTH_PATH, apiBaseUrl).toString()
 
   if (await canReachApi(healthUrl)) {
     console.log(`[vite-api] reusing API at ${healthUrl}`)

@@ -1,3 +1,14 @@
+import type { SessionWarning } from '../session/contracts'
+
+export interface SessionCatalogStatus {
+  discoveredCount: number
+  indexedCount: number
+  pendingCount: number
+  snapshotAt: string
+  stale: boolean
+  state: 'indexing' | 'ready' | 'refreshing'
+}
+
 /**
  * Lightweight metadata for a discovered transcript session.
  */
@@ -109,7 +120,9 @@ export interface ReplayRenderOptions {
  * Response envelope for discovered sessions.
  */
 export interface SessionListResponse {
+  catalog?: SessionCatalogStatus
   sessions: SessionRef[]
+  warnings?: SessionWarning[]
 }
 
 /**

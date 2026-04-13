@@ -320,6 +320,7 @@ describe('createSessionSource', () => {
     const sessionSource = createSessionSource({ homeDirectory: home })
 
     await expect(sessionSource.listSessions()).resolves.toEqual([])
+    expect(sessionSource.listCatalogWarnings?.()).toEqual([])
     await expect(
       sessionSource.searchSessions({ query: 'anything', limit: 5 }),
     ).resolves.toEqual([])

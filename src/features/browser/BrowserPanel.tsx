@@ -1,4 +1,5 @@
 import { ChevronDown, FolderGit2, RefreshCw, Search } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import {
   SidebarContent,
   SidebarGroup,
@@ -29,6 +30,8 @@ export type BrowserPanelProps = {
   searchText: string
   loading?: boolean
   error?: string | null
+  notice?: string | null
+  summaryText?: string
   onSearchTextChange: (value: string) => void
   onSelectSession: (sessionId: string) => void
   onRefresh: () => void
@@ -56,6 +59,12 @@ function sessionByProvider(sessions: SessionSummary[]) {
     )
 }
 
+function providerContentId(provider: string): string {
+  const sanitized = provider.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+
+  return `session-provider-${sanitized.replace(/(^-+)|(-+$)/g, '') || 'group'}`
+}
+
 function BrowserPanel({
   sessions,
   selectedSessionId,
@@ -65,9 +74,27 @@ function BrowserPanel({
   onRefresh,
   loading = false,
   error = null,
+  notice = null,
+  summaryText,
   emptyMessage = 'No sessions found',
 }: BrowserPanelProps) {
-  const groups = sessionByProvider(sessions)
+  const groups = useMemo(() => sessionByProvider(sessions), [sessions])
+  const [collapsedProviders, setCollapsedProviders] = useState<Record<string, true>>({})
+
+  const toggleProvider = (provider: string) => {
+    setCollapsedProviders((current) => {
+      if (current[provider]) {
+        const next = { ...current }
+        delete next[provider]
+        return next
+      }
+
+      return {
+        ...current,
+        [provider]: true,
+      }
+    })
+  }
 
   return (
     <>
@@ -78,7 +105,7 @@ function BrowserPanel({
         </div>
         <div className="session-sidebar__summary">
           <FolderGit2 size={14} strokeWidth={1.8} />
-          <p>{sessions.length} sessions loaded</p>
+          <p>{summaryText ?? `${sessions.length} sessions loaded`}</p>
           <Button
             size="sm"
             variant="outline"
@@ -102,6 +129,7 @@ function BrowserPanel({
       </SidebarHeader>
 
       <SidebarContent className="session-sidebar__content">
+        {!error && notice ? <p className="session-sidebar__notice">{notice}</p> : null}
         {error ? (
           <p className="session-sidebar__empty">Error: {error}</p>
         ) : loading ? (
@@ -109,35 +137,54 @@ function BrowserPanel({
         ) : groups.length === 0 ? (
           <p className="session-sidebar__empty">{emptyMessage}</p>
         ) : (
-          groups.map((group) => (
-            <SidebarGroup className="session-sidebar__group" key={group.provider}>
-              <SidebarGroupLabel className="session-sidebar__group-label">
-                <span className="session-sidebar__group-title">
-                  <ChevronDown size={12} strokeWidth={1.8} />
-                  {group.provider}
-                </span>
-                <Badge>{group.sessions.length}</Badge>
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {group.sessions.map((session) => (
-                    <SidebarMenuItem key={session.id}>
-                      <SidebarMenuButton
-                        aria-current={selectedSessionId === session.id ? 'page' : undefined}
-                        aria-selected={selectedSessionId === session.id}
-                        isActive={selectedSessionId === session.id}
-                        onClick={() => onSelectSession(session.id)}
-                      >
-                        <span className="session-sidebar__session-title">{session.title}</span>
-                        <span className="session-sidebar__session-project">{session.project}</span>
-                        <span className="session-sidebar__session-updated">{session.updatedAt}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))
+          groups.map((group) => {
+            const contentId = providerContentId(group.provider)
+            const isCollapsed = collapsedProviders[group.provider] ?? false
+
+            return (
+              <SidebarGroup className="session-sidebar__group" key={group.provider}>
+                <SidebarGroupLabel className="session-sidebar__group-label">
+                  <button
+                    type="button"
+                    className="session-sidebar__group-trigger"
+                    aria-controls={contentId}
+                    aria-expanded={!isCollapsed}
+                    onClick={() => toggleProvider(group.provider)}
+                  >
+                    <span className="session-sidebar__group-title">
+                      <ChevronDown
+                        size={12}
+                        strokeWidth={1.8}
+                        className="session-sidebar__group-chevron"
+                      />
+                      {group.provider}
+                    </span>
+                    <Badge>{group.sessions.length}</Badge>
+                  </button>
+                </SidebarGroupLabel>
+                {!isCollapsed ? (
+                  <SidebarGroupContent id={contentId}>
+                    <SidebarMenu>
+                      {group.sessions.map((session) => (
+                        <SidebarMenuItem key={session.id}>
+                          <SidebarMenuButton
+                            aria-current={selectedSessionId === session.id ? 'page' : undefined}
+                            aria-selected={selectedSessionId === session.id}
+                            isActive={selectedSessionId === session.id}
+                            onClick={() => onSelectSession(session.id)}
+                          >
+                            <span className="session-sidebar__session-title">{session.title}</span>
+                            <span className="session-sidebar__session-project">{session.project}</span>
+                            <span className="session-sidebar__session-updated">{session.updatedAt}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                ) : null}
+              </SidebarGroup>
+            )
+          })
         )}
       </SidebarContent>
 

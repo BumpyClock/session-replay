@@ -15,7 +15,9 @@ import {
   createToolCall,
   createTurn,
   displayNameFromPath,
+  extractTextFragments,
   finalizeTurns,
+  normalizeWhitespace,
   summarizeTurns,
   toolResultText,
 } from './shared.js'
@@ -28,7 +30,7 @@ interface GeminiFile {
 }
 
 interface GeminiMessage {
-  content?: string
+  content?: unknown
   id?: string
   model?: string
   thoughts?: Array<{
@@ -73,6 +75,8 @@ export async function loadGeminiSession(file: Readonly<SessionFileRef>): Promise
   let currentTurn: NormalizedTurn | null = null
 
   for (const message of payload.messages ?? []) {
+    const messageText = normalizeGeminiMessageText(message.content)
+
     if (message.type === 'user') {
       currentTurn = createTurn({
         filePath: file.path,
@@ -80,7 +84,7 @@ export async function loadGeminiSession(file: Readonly<SessionFileRef>): Promise
         index: turns.length,
         provider: 'gemini',
         timestamp: message.timestamp ?? null,
-        userText: message.content?.trim() ?? '',
+        userText: messageText,
       })
       turns.push(currentTurn)
       continue
@@ -136,13 +140,13 @@ export async function loadGeminiSession(file: Readonly<SessionFileRef>): Promise
       )
     }
 
-    if (message.content?.trim()) {
+    if (messageText) {
       const block = createTextBlock({
         filePath: file.path,
         id: `${currentTurn.id}:assistant:${currentTurn.assistantBlocks.length}`,
         kind: 'text',
         provider: 'gemini',
-        text: message.content,
+        text: messageText,
         timestamp: message.timestamp ?? null,
         rawTypes: ['gemini'],
       })
@@ -187,6 +191,36 @@ export function createGeminiProvider(): SessionCatalogProvider {
     index: indexGeminiSession,
     load: loadGeminiSession,
   }
+}
+
+function normalizeGeminiMessageText(value: unknown): string {
+  if (typeof value === 'string') {
+    return normalizeWhitespace(value)
+  }
+
+  if (Array.isArray(value)) {
+    return extractTextFragments(value).join('\n\n')
+  }
+
+  if (!value || typeof value !== 'object') {
+    return ''
+  }
+
+  const record = value as Record<string, unknown>
+
+  if (typeof record.text === 'string') {
+    return normalizeWhitespace(record.text)
+  }
+
+  if (record.parts !== undefined) {
+    return normalizeGeminiMessageText(record.parts)
+  }
+
+  if (record.content !== undefined) {
+    return normalizeGeminiMessageText(record.content)
+  }
+
+  return ''
 }
 
 function normalizeGeminiTool(toolCall: NonNullable<GeminiMessage['toolCalls']>[number]) {
