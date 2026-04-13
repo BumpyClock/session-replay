@@ -1,5 +1,9 @@
 import type { SessionCatalogStatus } from '../../src/lib/api/contracts'
-import { displayNameFromPath, decodeProjectFromAgentDir } from '../providers/shared'
+import {
+  createIndexedSessionEntry,
+  decodeProjectFromAgentDir,
+  displayNameFromPath,
+} from '../providers/shared'
 import { basenameWithoutExtension, normalizePathForId } from '../session-files/path-utils'
 import { ApiError } from '../api/errors'
 import {
@@ -47,6 +51,7 @@ interface IndexFileResult {
  * Discovery builds a cheap snapshot first, then background indexing enriches it.
  */
 export class SessionCatalogService {
+  private activeForegroundLoads = 0
   private catalogWarnings: SessionWarning[] = []
   private catalogStatus: SessionCatalogStatus = createEmptyCatalogStatus()
   private readonly fileIndex = new Map<string, SessionFileRef>()
@@ -54,6 +59,7 @@ export class SessionCatalogService {
   private readonly fullSessionCache = new Map<string, CachedSession>()
   private readonly inflightIndex = new Map<string, Promise<IndexedSessionEntry>>()
   private readonly inflightLoad = new Map<string, Promise<NormalizedSession>>()
+  private readonly foregroundIdleResolvers = new Set<() => void>()
   private indexingPromise: Promise<void> | null = null
   private pendingState: SessionCatalogStatus['state'] = 'ready'
   private readonly pendingIndexPaths = new Set<string>()
@@ -304,6 +310,16 @@ export class SessionCatalogService {
     const nextWarnings = [...baseWarnings]
 
     await runWithConcurrency(files, BACKGROUND_INDEX_CONCURRENCY, async (file) => {
+      if (!this.pendingIndexPaths.has(file.path)) {
+        return
+      }
+
+      await this.waitForForegroundIdle()
+
+      if (!this.pendingIndexPaths.has(file.path)) {
+        return
+      }
+
       const result = await this.safeIndexFile(file)
       if (generation !== this.refreshGeneration) {
         return
@@ -311,6 +327,10 @@ export class SessionCatalogService {
 
       const currentFile = this.fileIndex.get(file.path)
       if (!currentFile || !sameFileFingerprint(currentFile, file)) {
+        return
+      }
+
+      if (!this.pendingIndexPaths.has(file.path)) {
         return
       }
 
@@ -475,18 +495,60 @@ export class SessionCatalogService {
       throw new ApiError(500, 'provider_not_found', `Provider ${file.source} not available`)
     }
 
+    const releaseForegroundLoad = this.beginForegroundLoad()
     const promise = provider
       .load(file)
       .then((session) => {
         this.fullSessionCache.set(file.path, { file, session })
+        this.commitLoadedSession(file, session)
         return session
       })
       .finally(() => {
+        releaseForegroundLoad()
         this.inflightLoad.delete(file.path)
       })
 
     this.inflightLoad.set(file.path, promise)
     return promise
+  }
+
+  private beginForegroundLoad(): () => void {
+    this.activeForegroundLoads += 1
+
+    return () => {
+      this.activeForegroundLoads = Math.max(0, this.activeForegroundLoads - 1)
+      if (this.activeForegroundLoads === 0) {
+        for (const resolve of this.foregroundIdleResolvers) {
+          resolve()
+        }
+        this.foregroundIdleResolvers.clear()
+      }
+    }
+  }
+
+  private commitLoadedSession(file: Readonly<SessionFileRef>, session: Readonly<NormalizedSession>): void {
+    const entry = createIndexedSessionEntry(file, session)
+
+    this.sessionIndex.set(file.path, entry)
+    this.sessionRefIndex.set(file.path, entry.ref)
+    this.updateIdIndexForPath(file.path, entry.ref)
+    this.pendingIndexPaths.delete(file.path)
+    this.catalogWarnings = this.catalogWarnings.filter(
+      (warning) => !(warning.code === 'catalog_index_failed' && warning.filePath === file.path),
+    )
+    if (this.pendingIndexPaths.size === 0) {
+      this.pendingState = 'ready'
+      this.snapshotIsStale = false
+    }
+    this.updateCatalogStatus()
+  }
+
+  private async waitForForegroundIdle(): Promise<void> {
+    while (this.activeForegroundLoads > 0) {
+      await new Promise<void>((resolve) => {
+        this.foregroundIdleResolvers.add(resolve)
+      })
+    }
   }
 }
 

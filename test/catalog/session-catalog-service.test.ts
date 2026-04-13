@@ -336,11 +336,91 @@ describe('SessionCatalogService', () => {
 
     resolveIndex?.(indexed)
     await vi.waitFor(async () => {
-      await expect(service.listSessions()).resolves.toEqual([indexed.ref])
+      await expect(service.listSessions()).resolves.toEqual([
+        expect.objectContaining({
+          id: indexed.ref.id,
+          path: indexed.ref.path,
+          source: indexed.ref.source,
+          title: indexed.ref.title,
+        }),
+      ])
       expect(service.getCatalogStatus()).toEqual(
         expect.objectContaining({
           discoveredCount: 1,
           indexedCount: 1,
+          pendingCount: 0,
+          state: 'ready',
+        }),
+      )
+    })
+  })
+
+  it('prioritizes direct loads over queued background indexing work', async () => {
+    const files = Array.from({ length: 9 }, (_, index) =>
+      createFile(`copilot:alpha/session-${index + 1}.jsonl`, { mtimeMs: 50 + index }),
+    )
+    const sessions = files.map((file, index) =>
+      createSession(file, { project: 'alpha', title: `Session ${index + 1}` }),
+    )
+    const entries = sessions.map((session, index) =>
+      createIndexedEntry(files[index]!, session, {
+        metadataText: session.ref.title.toLowerCase(),
+        transcriptText: `${session.ref.title.toLowerCase()} transcript`,
+      }),
+    )
+
+    const heldResolvers = new Map<string, (value: IndexedSessionEntry) => void>()
+    const queuedTarget = files.at(-1)!
+
+    const provider: SessionCatalogProvider = {
+      source: 'copilot',
+      scan: vi.fn(async () => files),
+      index: vi.fn((file) => {
+        const entry = entries.find((candidate) => candidate.file.path === file.path)!
+        if (file.path === queuedTarget.path) {
+          return Promise.resolve(entry)
+        }
+
+        return new Promise<IndexedSessionEntry>((resolve) => {
+          heldResolvers.set(file.path, resolve)
+        })
+      }),
+      load: vi.fn(async (file) => sessions.find((session) => session.ref.path === file.path)!),
+    }
+
+    const service = new SessionCatalogService({
+      homeDir: '/tmp',
+      providers: [provider],
+    })
+
+    await service.listSessions()
+
+    await vi.waitFor(() => {
+      expect(provider.index).toHaveBeenCalledTimes(8)
+    })
+    expect(provider.index).not.toHaveBeenCalledWith(queuedTarget)
+
+    const loaded = await service.loadSession({ path: queuedTarget.path })
+
+    expect(loaded.ref.path).toBe(queuedTarget.path)
+    expect(provider.load).toHaveBeenCalledWith(queuedTarget)
+    expect(provider.index).not.toHaveBeenCalledWith(queuedTarget)
+    expect(service.getCatalogStatus()).toEqual(
+      expect.objectContaining({
+        discoveredCount: 9,
+        pendingCount: 8,
+      }),
+    )
+
+    for (const [path, resolve] of heldResolvers.entries()) {
+      resolve(entries.find((entry) => entry.file.path === path)!)
+    }
+
+    await vi.waitFor(async () => {
+      await expect(service.listSessions()).resolves.toHaveLength(9)
+      expect(service.getCatalogStatus()).toEqual(
+        expect.objectContaining({
+          indexedCount: 9,
           pendingCount: 0,
           state: 'ready',
         }),

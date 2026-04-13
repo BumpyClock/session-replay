@@ -1,5 +1,5 @@
 import { BookmarkPlus, Eye, EyeOff, Sparkles } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserPanel, type SessionSummary } from './features/browser/BrowserPanel'
 import { ReplayPanel } from './features/preview/ReplayPanel'
 import type { PreviewTurn, ReplaySession } from './features/preview/ReplayPanel'
@@ -144,10 +144,12 @@ function formatCatalogSummary(status: SessionCatalogStatus | null, sessionCount:
 }
 
 const apiClient = resolveApiClient()
+const CATALOG_POLL_INTERVAL_MS = 750
 
 function App() {
   const [browserOpen, setBrowserOpen] = useState(false)
   const [catalogStatus, setCatalogStatus] = useState<SessionCatalogStatus | null>(null)
+  const [catalogPollTick, setCatalogPollTick] = useState(0)
   const [searchText, setSearchText] = useState('')
   const [catalogWarnings, setCatalogWarnings] = useState<SessionWarning[]>([])
   const [sessions, setSessions] = useState<SessionRef[]>([])
@@ -162,6 +164,7 @@ function App() {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const pollingRequestInFlight = useRef(false)
 
   const ensureDraft = useEditorStore((state) => state.ensureDraft)
   const setBlockText = useEditorStore((state) => state.setBlockText)
@@ -189,9 +192,19 @@ function App() {
     return draft
   })
 
-  const loadSessions = useCallback(async () => {
-    setSessionsLoading(true)
-    setSessionsError(null)
+  const loadSessions = useCallback(async (options?: { background?: boolean }) => {
+    const isBackground = options?.background ?? false
+    if (isBackground && pollingRequestInFlight.current) {
+      return
+    }
+
+    if (isBackground) {
+      pollingRequestInFlight.current = true
+    } else {
+      setSessionsLoading(true)
+      setSessionsError(null)
+    }
+
     try {
       const response = await apiClient.listSessions()
       setCatalogStatus(response.catalog ?? null)
@@ -202,13 +215,20 @@ function App() {
         console.warn('[catalog] skipped sessions during refresh', nextWarnings)
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load sessions'
-      setSessionsError(message)
-      setCatalogStatus(null)
-      setCatalogWarnings([])
-      setSessions([])
+      if (!isBackground) {
+        const message = error instanceof Error ? error.message : 'Failed to load sessions'
+        setSessionsError(message)
+        setCatalogStatus(null)
+        setCatalogWarnings([])
+        setSessions([])
+      }
     } finally {
-      setSessionsLoading(false)
+      if (isBackground) {
+        pollingRequestInFlight.current = false
+        setCatalogPollTick((value) => value + 1)
+      } else {
+        setSessionsLoading(false)
+      }
     }
   }, [])
 
@@ -218,6 +238,7 @@ function App() {
     () => formatCatalogSummary(catalogStatus, sessions.length),
     [catalogStatus, sessions.length],
   )
+  const catalogRefreshing = sessionsLoading || (catalogStatus !== null && catalogStatus.state !== 'ready')
 
   const baseRevision = loadedSession
     ? getSessionBaseRevision({
@@ -280,6 +301,20 @@ function App() {
   useEffect(() => {
     void loadSessions()
   }, [loadSessions])
+
+  useEffect(() => {
+    if (!catalogStatus || catalogStatus.state === 'ready' || sessionsError) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadSessions({ background: true })
+    }, CATALOG_POLL_INTERVAL_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [catalogPollTick, catalogStatus, loadSessions, sessionsError])
 
   useEffect(() => {
     if (!loadedSession) {
@@ -352,9 +387,9 @@ function App() {
     [sessions],
   )
 
-  const handleRefresh = useCallback(() => {
+  const handleRefresh = useCallback(async () => {
     setSessionError(null)
-    return void loadSessions()
+    await loadSessions()
   }, [loadSessions])
 
   const handleExportOptionsChange = (next: ExportOptions) => {
@@ -446,6 +481,7 @@ function App() {
             onSelectSession={handleSelectSession}
             onRefresh={handleRefresh}
             loading={sessionsLoading}
+            refreshing={catalogRefreshing}
             error={sessionsError}
             notice={catalogNotice}
             summaryText={catalogSummary}

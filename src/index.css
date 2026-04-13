@@ -1040,41 +1040,110 @@ small {
   font-size: var(--font-size-7);
 }
 
+.session-sidebar__toolbar {
+  position: relative;
+  min-height: 38px;
+  isolation: isolate;
+}
+
+.session-sidebar__toolbar-base {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 38px;
+}
+
 .session-sidebar__summary {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  justify-content: space-between;
   color: var(--color-text-subtle);
   font-size: var(--font-size-3);
+  min-width: 0;
 }
 
 .session-sidebar__summary p {
   margin: 0;
   flex: 1;
+  min-width: 0;
 }
 
-.session-sidebar__refresh {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+.session-sidebar__toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.session-sidebar__search-trigger-shell {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.session-sidebar__icon-button {
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
   padding: 0;
   justify-content: center;
+  border-radius: 999px;
 }
 
-.session-sidebar__search {
-  display: grid;
-  grid-template-columns: 16px 1fr;
-  gap: var(--space-2);
+.session-sidebar__search-shell {
+  position: absolute;
+  inset: 0;
+  min-height: 38px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, var(--color-border));
+  background: color-mix(in srgb, var(--color-surface-solid) 92%, var(--color-primary-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary-soft) 65%, transparent);
+}
+
+.session-sidebar__search-shell-inner {
+  display: flex;
   align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  padding: 0 6px 0 10px;
 }
 
 .session-sidebar__search-icon {
   color: var(--color-text-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.session-sidebar__search .input {
+.session-sidebar__search-shell .input {
   min-height: 38px;
+  border: 0;
+  background: transparent;
+  padding-left: 0;
+  padding-right: 0;
+  box-shadow: none;
+}
+
+.session-sidebar__search-shell .input:focus {
+  outline: none;
+}
+
+.session-sidebar__search-close {
+  color: var(--color-text-subtle);
+}
+
+.session-sidebar__refresh-icon[data-refreshing='true'] {
+  animation: none;
+}
+
+.session-sidebar__refresh-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .session-sidebar__empty {
@@ -1137,6 +1206,16 @@ small {
 .session-sidebar__session-updated {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-sidebar__group-chevron {
+    transition: none;
+  }
+
+  .session-sidebar__refresh-icon {
+    transform: none;
+  }
 }
 
 .workspace-split {

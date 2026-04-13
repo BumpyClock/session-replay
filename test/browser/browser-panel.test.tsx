@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserPanel, type SessionSummary } from '../../src/features/browser/BrowserPanel'
@@ -26,6 +26,95 @@ const sessions: SessionSummary[] = [
 ]
 
 describe('BrowserPanel', () => {
+  it('expands the search field from the icon button and clears it when dismissed', async () => {
+    const user = userEvent.setup()
+    const onSearchTextChange = vi.fn()
+
+    function ControlledBrowserPanel() {
+      const [searchText, setSearchText] = React.useState('')
+
+      return (
+        <BrowserPanel
+          sessions={sessions}
+          selectedSessionId={null}
+          searchText={searchText}
+          onSearchTextChange={(value) => {
+            onSearchTextChange(value)
+            setSearchText(value)
+          }}
+          onSelectSession={vi.fn()}
+          onRefresh={vi.fn()}
+        />
+      )
+    }
+
+    render(<ControlledBrowserPanel />)
+
+    const openSearchButton = screen.getByRole('button', { name: /^search sessions$/i })
+    await user.click(openSearchButton)
+
+    const searchInput = screen.getByRole('textbox', { name: /search sessions/i })
+    expect(searchInput).toHaveFocus()
+
+    await user.type(searchInput, 'codex')
+
+    expect(onSearchTextChange).toHaveBeenNthCalledWith(1, 'c')
+    expect(onSearchTextChange).toHaveBeenLastCalledWith('codex')
+
+    await user.keyboard('{Escape}')
+
+    expect(onSearchTextChange).toHaveBeenLastCalledWith('')
+  })
+
+  it('marks the refresh button busy while a refresh is in progress', () => {
+    render(
+      <BrowserPanel
+        sessions={sessions}
+        selectedSessionId={null}
+        searchText=""
+        onSearchTextChange={vi.fn()}
+        onSelectSession={vi.fn()}
+        onRefresh={vi.fn()}
+        refreshing
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /refresh sessions/i })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    )
+  })
+
+  it('keeps refresh busy long enough to show manual refresh feedback', async () => {
+    const user = userEvent.setup()
+    let resolveRefresh: (() => void) | null = null
+
+    render(
+      <BrowserPanel
+        sessions={sessions}
+        selectedSessionId={null}
+        searchText=""
+        onSearchTextChange={vi.fn()}
+        onSelectSession={vi.fn()}
+        onRefresh={() =>
+          new Promise<void>((resolve) => {
+            resolveRefresh = resolve
+          })
+        }
+      />,
+    )
+
+    const refreshButton = screen.getByRole('button', { name: /refresh sessions/i })
+
+    await user.click(refreshButton)
+    expect(refreshButton).toHaveAttribute('aria-busy', 'true')
+
+    resolveRefresh?.()
+    await waitFor(() => {
+      expect(refreshButton).toHaveAttribute('aria-busy', 'false')
+    })
+  })
+
   it('lets users collapse and expand provider groups', async () => {
     const user = userEvent.setup()
 

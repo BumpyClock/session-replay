@@ -159,4 +159,127 @@ it('loads a session, renders preview state, and exports html', async () => {
     await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/0 sessions loaded · indexing 3\/10/i)).toBeInTheDocument()
   })
+
+  it('polls while catalog indexing and refreshes session titles when indexing finishes', async () => {
+    listSessionsMock
+      .mockResolvedValueOnce({
+        catalog: {
+          discoveredCount: 1,
+          indexedCount: 0,
+          pendingCount: 1,
+          snapshotAt: '2026-04-13T10:00:00.000Z',
+          stale: false,
+          state: 'indexing',
+        },
+        sessions: [
+          {
+            id: 'session-1',
+            source: 'claude-code',
+            path: '/tmp/session-1.jsonl',
+            title: 'session-1',
+            project: 'sample-project',
+            updatedAt: '2026-04-13T10:00:00.000Z',
+            startedAt: null,
+            cwd: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        catalog: {
+          discoveredCount: 1,
+          indexedCount: 1,
+          pendingCount: 0,
+          snapshotAt: '2026-04-13T10:00:01.000Z',
+          stale: false,
+          state: 'ready',
+        },
+        sessions: [
+          {
+            id: 'session-1',
+            source: 'claude-code',
+            path: '/tmp/session-1.jsonl',
+            title: 'Indexed session',
+            project: 'sample-project',
+            updatedAt: '2026-04-13T10:00:00.000Z',
+            startedAt: null,
+            cwd: null,
+            stats: {
+              turnCount: 2,
+            },
+          },
+        ],
+      })
+
+    const { default: App } = await import('../../src/App')
+
+    render(<App />)
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('button', { name: /session-1/i })).toBeInTheDocument()
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(2), { timeout: 2000 })
+    expect(await screen.findByRole('button', { name: /indexed session/i })).toBeInTheDocument()
+  }, 4000)
+
+  it('keeps polling after a transient background refresh failure', async () => {
+    listSessionsMock
+      .mockResolvedValueOnce({
+        catalog: {
+          discoveredCount: 1,
+          indexedCount: 0,
+          pendingCount: 1,
+          snapshotAt: '2026-04-13T10:00:00.000Z',
+          stale: false,
+          state: 'indexing',
+        },
+        sessions: [
+          {
+            id: 'session-1',
+            source: 'claude-code',
+            path: '/tmp/session-1.jsonl',
+            title: 'session-1',
+            project: 'sample-project',
+            updatedAt: '2026-04-13T10:00:00.000Z',
+            startedAt: null,
+            cwd: null,
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValueOnce({
+        catalog: {
+          discoveredCount: 1,
+          indexedCount: 1,
+          pendingCount: 0,
+          snapshotAt: '2026-04-13T10:00:02.000Z',
+          stale: false,
+          state: 'ready',
+        },
+        sessions: [
+          {
+            id: 'session-1',
+            source: 'claude-code',
+            path: '/tmp/session-1.jsonl',
+            title: 'Recovered session',
+            project: 'sample-project',
+            updatedAt: '2026-04-13T10:00:00.000Z',
+            startedAt: null,
+            cwd: null,
+            stats: {
+              turnCount: 2,
+            },
+          },
+        ],
+      })
+
+    const { default: App } = await import('../../src/App')
+
+    render(<App />)
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('button', { name: /session-1/i })).toBeInTheDocument()
+
+    await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(3), { timeout: 3500 })
+    expect(await screen.findByRole('button', { name: /recovered session/i })).toBeInTheDocument()
+  }, 5000)
 })

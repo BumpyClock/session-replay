@@ -1,5 +1,6 @@
-import { ChevronDown, FolderGit2, RefreshCw, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { ChevronDown, FolderGit2, RefreshCw, Search, X } from 'lucide-react'
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   SidebarContent,
   SidebarGroup,
@@ -29,16 +30,29 @@ export type BrowserPanelProps = {
   selectedSessionId: string | null
   searchText: string
   loading?: boolean
+  refreshing?: boolean
   error?: string | null
   notice?: string | null
   summaryText?: string
   onSearchTextChange: (value: string) => void
   onSelectSession: (sessionId: string) => void
-  onRefresh: () => void
+  onRefresh: () => void | Promise<void>
   emptyMessage?: string
 }
 
 const providerOrder = ['Claude Code', 'Codex', 'Copilot', 'Cursor', 'Gemini']
+const minimumRefreshSpinMs = 560
+const searchMorphTransition = {
+  type: 'spring',
+  stiffness: 420,
+  damping: 34,
+  mass: 0.82,
+} as const
+
+const toolbarFadeTransition = {
+  duration: 0.18,
+  ease: [0.22, 1, 0.36, 1],
+} as const
 
 function sessionByProvider(sessions: SessionSummary[]) {
   const buckets = new Map<string, SessionSummary[]>()
@@ -73,6 +87,7 @@ function BrowserPanel({
   onSelectSession,
   onRefresh,
   loading = false,
+  refreshing = false,
   error = null,
   notice = null,
   summaryText,
@@ -80,6 +95,25 @@ function BrowserPanel({
 }: BrowserPanelProps) {
   const groups = useMemo(() => sessionByProvider(sessions), [sessions])
   const [collapsedProviders, setCollapsedProviders] = useState<Record<string, true>>({})
+  const [manualRefreshPending, setManualRefreshPending] = useState(false)
+  const [searchExpanded, setSearchExpanded] = useState(() => Boolean(searchText.trim()))
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const prefersReducedMotion = useReducedMotion()
+  const refreshActive = refreshing || manualRefreshPending
+
+  useEffect(() => {
+    if (searchText.trim()) {
+      setSearchExpanded(true)
+    }
+  }, [searchText])
+
+  useEffect(() => {
+    if (!searchExpanded) {
+      return
+    }
+
+    searchInputRef.current?.focus()
+  }, [searchExpanded])
 
   const toggleProvider = (provider: string) => {
     setCollapsedProviders((current) => {
@@ -96,6 +130,48 @@ function BrowserPanel({
     })
   }
 
+  const openSearch = () => {
+    setSearchExpanded(true)
+  }
+
+  const closeSearch = () => {
+    setSearchExpanded(false)
+    onSearchTextChange('')
+  }
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Escape') {
+      return
+    }
+
+    event.preventDefault()
+    closeSearch()
+  }
+
+  const handleRefreshClick = async () => {
+    if (manualRefreshPending) {
+      return
+    }
+
+    const startedAt = Date.now()
+    setManualRefreshPending(true)
+
+    try {
+      await onRefresh()
+    } finally {
+      const elapsed = Date.now() - startedAt
+      const remaining = minimumRefreshSpinMs - elapsed
+
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, remaining)
+        })
+      }
+
+      setManualRefreshPending(false)
+    }
+  }
+
   return (
     <>
       <SidebarHeader className="session-sidebar__header">
@@ -103,29 +179,126 @@ function BrowserPanel({
           <p className="eyebrow">Session browser</p>
           <h2>Replay library</h2>
         </div>
-        <div className="session-sidebar__summary">
-          <FolderGit2 size={14} strokeWidth={1.8} />
-          <p>{summaryText ?? `${sessions.length} sessions loaded`}</p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="session-sidebar__refresh"
-            onClick={onRefresh}
-            aria-label="Refresh sessions"
-            title="Refresh sessions"
-          >
-            <RefreshCw size={14} strokeWidth={1.8} />
-          </Button>
-        </div>
-        <div className="session-sidebar__search">
-          <Search size={14} strokeWidth={1.8} className="session-sidebar__search-icon" />
-          <Input
-            value={searchText}
-            onChange={(event) => onSearchTextChange(event.target.value)}
-            placeholder="Search provider, project, path, title"
-            aria-label="Search sessions"
-          />
-        </div>
+        <LayoutGroup id="session-sidebar-toolbar">
+          <div className="session-sidebar__toolbar">
+            <AnimatePresence initial={false}>
+              {!searchExpanded ? (
+                <motion.div
+                  key="session-sidebar-toolbar-base"
+                  className="session-sidebar__toolbar-base"
+                  initial={false}
+                  animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                  exit={
+                    prefersReducedMotion
+                      ? { opacity: 0 }
+                      : { opacity: 0, x: -14, filter: 'blur(6px)' }
+                  }
+                  transition={toolbarFadeTransition}
+                >
+                  <div className="session-sidebar__summary">
+                    <FolderGit2 size={14} strokeWidth={1.8} />
+                    <p>{summaryText ?? `${sessions.length} sessions loaded`}</p>
+                  </div>
+                  <div className="session-sidebar__toolbar-actions">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="session-sidebar__icon-button session-sidebar__refresh"
+                      onClick={() => {
+                        void handleRefreshClick()
+                      }}
+                      aria-label="Refresh sessions"
+                      aria-busy={refreshActive}
+                      title="Refresh sessions"
+                    >
+                      <motion.span
+                        className="session-sidebar__refresh-icon"
+                        animate={
+                          refreshActive && !prefersReducedMotion ? { rotate: 360 } : { rotate: 0 }
+                        }
+                        transition={
+                          refreshActive && !prefersReducedMotion
+                            ? {
+                                duration: 0.9,
+                                ease: 'linear',
+                                repeat: Infinity,
+                              }
+                            : {
+                                duration: 0.2,
+                                ease: [0.22, 1, 0.36, 1],
+                              }
+                        }
+                      >
+                        <RefreshCw size={14} strokeWidth={1.8} />
+                      </motion.span>
+                    </Button>
+
+                    <motion.div
+                      layoutId="session-sidebar-search-control"
+                      className="session-sidebar__search-trigger-shell"
+                      transition={prefersReducedMotion ? { duration: 0 } : searchMorphTransition}
+                    >
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="session-sidebar__icon-button session-sidebar__search-trigger"
+                        onClick={openSearch}
+                        aria-label="Search sessions"
+                        aria-expanded={searchExpanded}
+                        aria-controls="session-sidebar-search-input"
+                        title="Search sessions"
+                      >
+                        <Search size={14} strokeWidth={1.8} />
+                      </Button>
+                    </motion.div>
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+
+            <AnimatePresence initial={false}>
+              {searchExpanded ? (
+                <motion.div
+                  key="session-sidebar-search-shell"
+                  layoutId="session-sidebar-search-control"
+                  className="session-sidebar__search-shell"
+                  transition={prefersReducedMotion ? { duration: 0 } : searchMorphTransition}
+                >
+                  <motion.div
+                    className="session-sidebar__search-shell-inner"
+                    initial={prefersReducedMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={toolbarFadeTransition}
+                  >
+                    <span className="session-sidebar__search-icon" aria-hidden="true">
+                      <Search size={14} strokeWidth={1.8} />
+                    </span>
+                    <Input
+                      id="session-sidebar-search-input"
+                      ref={searchInputRef}
+                      value={searchText}
+                      onChange={(event) => onSearchTextChange(event.target.value)}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="Search provider, project, path, title"
+                      aria-label="Search sessions"
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="session-sidebar__icon-button session-sidebar__search-close"
+                      onClick={closeSearch}
+                      aria-label="Close search"
+                      title="Close search"
+                    >
+                      <X size={14} strokeWidth={1.8} />
+                    </Button>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        </LayoutGroup>
       </SidebarHeader>
 
       <SidebarContent className="session-sidebar__content">
