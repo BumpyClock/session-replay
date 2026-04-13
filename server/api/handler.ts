@@ -53,6 +53,14 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
         return jsonResponse(response, { status: 200 }, corsHeaders)
       }
 
+      if (request.method === 'POST' && pathname === '/api/sessions/refresh') {
+        const response: SessionListResponse = {
+          sessions: [...(await sessionSource.refreshSessions())],
+        }
+
+        return jsonResponse(response, { status: 200 }, corsHeaders)
+      }
+
       if (request.method === 'POST' && pathname === '/api/load') {
         const body = await readJsonBody<SessionLoadRequest>(request)
         const resolvedRequest = normalizeLoadRequest(body, homeDirectory)

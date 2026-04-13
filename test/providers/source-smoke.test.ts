@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
   MaterializedReplaySession,
-  SessionLoadRequest,
   SessionRef,
-  SessionSearchRequest,
 } from '../../src/lib/api/contracts'
 import { createSessionSource, type ProviderDescriptor } from '../../server/providers/index'
+import type { SessionCatalogProvider } from '../../server/catalog'
+import type { NormalizedSession } from '../../src/lib/session'
 
 describe('createSessionSource', () => {
   it('merges provider sessions, skips missing modules, routes load by cached ref', async () => {
     const claudeSession: SessionRef = {
       id: 'claude-1',
       path: '/tmp/claude-1.jsonl',
-      source: 'claude',
+      source: 'claude-code',
       title: 'Claude Session',
       updatedAt: '2026-04-13T10:00:00.000Z',
     }
@@ -29,26 +29,76 @@ describe('createSessionSource', () => {
       source: codexSession.source,
       turns: [],
     }
-    const claudeListSessions = vi.fn<() => Promise<readonly SessionRef[]>>().mockResolvedValue([
+    const createProvider = (
+      session: SessionRef,
+      searchText: string,
+      normalizedSession: NormalizedSession,
+    ): SessionCatalogProvider => ({
+      source: session.source,
+      scan: vi.fn(async () => [
+        {
+          source: session.source,
+          path: session.path,
+          relativePath: `${session.source}/${session.id}.jsonl`,
+          fingerprint: { path: session.path, mtimeMs: 1, size: 1 },
+        },
+      ]),
+      index: vi.fn(async (file) => ({
+        file,
+        ref: {
+          id: session.id,
+          path: session.path,
+          source: session.source,
+          project: session.project ?? 'session',
+          title: session.title,
+          startedAt: session.startedAt ?? null,
+          updatedAt: session.updatedAt ?? null,
+          cwd: session.cwd ?? null,
+          summary: session.summary,
+          stats: session.stats,
+        },
+        searchDoc: {
+          metadataText: `${session.title} ${session.source}`.toLowerCase(),
+          transcriptText: searchText,
+        },
+        warnings: [],
+      })),
+      load: vi.fn(async () => normalizedSession),
+    })
+    const claudeProvider = createProvider(
       claudeSession,
-    ])
-    const claudeSearchSessions = vi
-      .fn<(request: Readonly<SessionSearchRequest>) => Promise<readonly SessionRef[]>>()
-      .mockImplementation(async (request) => (request.query.includes('claude') ? [claudeSession] : []))
-    const claudeLoadSession = vi
-      .fn<(request: Readonly<SessionLoadRequest>) => Promise<MaterializedReplaySession>>()
-      .mockImplementation(async () => {
-        throw new Error('claude load should not be called for codex request')
-      })
-    const codexListSessions = vi.fn<() => Promise<readonly SessionRef[]>>().mockResolvedValue([
-      codexSession,
-    ])
-    const codexSearchSessions = vi
-      .fn<(request: Readonly<SessionSearchRequest>) => Promise<readonly SessionRef[]>>()
-      .mockImplementation(async (request) => (request.query.includes('codex') ? [codexSession] : []))
-    const codexLoadSession = vi
-      .fn<(request: Readonly<SessionLoadRequest>) => Promise<MaterializedReplaySession>>()
-      .mockResolvedValue(codexLoadedSession)
+      'claude transcript',
+      {
+        ref: {
+          id: claudeSession.id,
+          path: claudeSession.path,
+          source: 'claude-code',
+          project: 'session',
+          title: claudeSession.title,
+          startedAt: null,
+          updatedAt: claudeSession.updatedAt ?? null,
+          cwd: null,
+        },
+        cwd: null,
+        warnings: [],
+        turns: [],
+      },
+    )
+    const codexProvider = createProvider(codexSession, 'codex transcript', {
+      ref: {
+        id: codexSession.id,
+        path: codexSession.path,
+        source: 'codex',
+        project: 'session',
+        title: codexSession.title,
+        startedAt: null,
+        updatedAt: codexSession.updatedAt ?? null,
+        cwd: null,
+      },
+      cwd: null,
+      warnings: [],
+      turns: [],
+    })
     const descriptors: readonly ProviderDescriptor[] = [
       { key: 'claude', modulePath: './claude.ts' },
       { key: 'codex', modulePath: './codex-provider.ts' },
@@ -57,21 +107,13 @@ describe('createSessionSource', () => {
     const moduleLoader = vi.fn(async (descriptor: Readonly<ProviderDescriptor>) => {
       if (descriptor.key === 'claude') {
         return {
-          createSessionSource: () => ({
-            listSessions: claudeListSessions,
-            loadSession: claudeLoadSession,
-            searchSessions: claudeSearchSessions,
-          }),
+          createSessionProvider: () => claudeProvider,
         }
       }
 
       if (descriptor.key === 'codex') {
         return {
-          createSessionSource: () => ({
-            listSessions: codexListSessions,
-            loadSession: codexLoadSession,
-            searchSessions: codexSearchSessions,
-          }),
+          createSessionProvider: () => codexProvider,
         }
       }
 
@@ -88,12 +130,12 @@ describe('createSessionSource', () => {
     await expect(sessionSource.searchSessions({ query: 'codex', limit: 10 })).resolves.toEqual([
       codexSession,
     ])
-    await expect(sessionSource.loadSession({ path: codexSession.path })).resolves.toEqual(
+    await expect(sessionSource.loadSession({ path: codexSession.path })).resolves.toMatchObject(
       codexLoadedSession,
     )
 
     expect(moduleLoader).toHaveBeenCalledTimes(3)
-    expect(codexLoadSession).toHaveBeenCalledWith({ path: codexSession.path })
-    expect(claudeLoadSession).not.toHaveBeenCalled()
+    expect(codexProvider.load).toHaveBeenCalledTimes(1)
+    expect(claudeProvider.load).not.toHaveBeenCalled()
   })
 })

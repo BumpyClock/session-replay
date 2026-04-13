@@ -1,12 +1,19 @@
 import { basename, relative } from 'node:path'
 import type {
+  IndexedSessionEntry,
   NormalizedTurn,
+  NormalizedSession,
+  SessionFileRef,
+  SessionFileFingerprint,
   SessionRef,
   SessionSource,
   SessionSourceMeta,
   SessionTextBlock,
   SessionToolCall,
 } from '../../src/lib/session/contracts.js'
+import { createSessionStats, summarizeNormalizedSession } from '../../src/lib/session/materialize.js'
+import { createSearchDocFromSession } from '../catalog/search.js'
+import type { SessionFileRecord } from '../session-files/filesystem.js'
 import {
   basenameWithoutExtension,
   decodeAgentProjectDirectory,
@@ -17,6 +24,7 @@ import {
 interface CreateSessionRefInput {
   cwd?: string | null
   homeDirectory: string
+  idPath?: string
   path: string
   project: string
   source: SessionSource
@@ -36,9 +44,10 @@ interface CreateTurnInput {
 
 export function createSessionRef(input: CreateSessionRefInput): SessionRef {
   const title = truncateText(input.title?.trim() || basenameWithoutExtension(input.path), 96)
+  const idPath = normalizePathForId(input.idPath ?? relative(input.homeDirectory, input.path))
 
   return {
-    id: `${input.source}:${normalizePathForId(relative(input.homeDirectory, input.path))}`,
+    id: `${input.source}:${idPath}`,
     path: input.path,
     source: input.source,
     project: input.project,
@@ -353,4 +362,44 @@ export function attachToolResult(
 
 export function displayNameFromPath(filePath: string): string {
   return basenameWithoutExtension(filePath) || basename(filePath)
+}
+
+export function createSessionFileFingerprint(file: Readonly<SessionFileRecord>): SessionFileFingerprint {
+  return {
+    path: file.path,
+    mtimeMs: file.mtimeMs,
+    size: file.size,
+  }
+}
+
+export function createSessionFileRef(
+  source: SessionSource,
+  file: Readonly<SessionFileRecord>,
+): SessionFileRef {
+  return {
+    source,
+    path: file.path,
+    relativePath: file.relativePath,
+    fingerprint: createSessionFileFingerprint(file),
+  }
+}
+
+export function createIndexedSessionEntry(
+  file: Readonly<SessionFileRef>,
+  session: Readonly<NormalizedSession>,
+): IndexedSessionEntry {
+  const ref: SessionRef = {
+    ...session.ref,
+    summary: summarizeNormalizedSession(session),
+    stats: createSessionStats(session),
+  }
+
+  return {
+    file: {
+      ...file,
+    },
+    ref,
+    searchDoc: createSearchDocFromSession(ref, session),
+    warnings: [...session.warnings],
+  }
 }

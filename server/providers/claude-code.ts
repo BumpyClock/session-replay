@@ -2,14 +2,17 @@ import { join } from 'node:path'
 import type { JsonLineEntry } from '../session-files/filesystem.js'
 import { listFilesRecursive, readJsonLines } from '../session-files/index.js'
 import type {
+  IndexedSessionEntry,
   NormalizedSession,
   NormalizedTurn,
-  SessionProvider,
-  SessionRef,
-} from '../../src/lib/session/contracts.js'
+  SessionCatalogProvider,
+  SessionFileRef,
+} from '../catalog/types.js'
 import {
   appendTurnLine,
   attachToolResult,
+  createIndexedSessionEntry,
+  createSessionFileRef,
   createSessionRef,
   createTextBlock,
   createToolCall,
@@ -31,45 +34,23 @@ interface ClaudeEntry {
   }
 }
 
-export function createClaudeCodeProvider(): SessionProvider {
-  return {
-    source: 'claude-code',
-    discover: async ({ homeDir }) => {
-      const rootPath = join(homeDir, '.claude', 'projects')
-      const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('.jsonl'))
-      const refs: SessionRef[] = []
-
-      for (const file of files) {
-        const projectDir = file.relativePath.split('/')[0] ?? ''
-        const session = await loadClaudeSession({
-          filePath: file.path,
-          homeDirectory: homeDir,
-          project: decodeProjectFromAgentDir(projectDir),
-          updatedAt: file.updatedAt,
-        })
-        refs.push(session.ref)
-      }
-
-      return refs
-    },
-    load: async (ref) => {
-      return loadClaudeSession({
-        filePath: ref.path,
-        homeDirectory: '',
-        project: ref.project,
-        updatedAt: ref.updatedAt,
-      })
-    },
-  }
+export async function scanClaudeCodeSessions(homeDirectory: string): Promise<SessionFileRef[]> {
+  const rootPath = join(homeDirectory, '.claude', 'projects')
+  const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('.jsonl'))
+  return files.map((file) => createSessionFileRef('claude-code', file))
 }
 
-async function loadClaudeSession(input: {
-  filePath: string
-  homeDirectory: string
-  project: string
-  updatedAt?: string | null
-}): Promise<NormalizedSession> {
-  const { entries, warnings } = await readJsonLines<ClaudeEntry>(input.filePath)
+export async function indexClaudeCodeSession(
+  file: Readonly<SessionFileRef>,
+): Promise<IndexedSessionEntry> {
+  const session = await loadClaudeCodeSession(file)
+  return createIndexedSessionEntry(file, session)
+}
+
+export async function loadClaudeCodeSession(
+  file: Readonly<SessionFileRef>,
+): Promise<NormalizedSession> {
+  const { entries, warnings } = await readJsonLines<ClaudeEntry>(file.path)
   const turns: NormalizedTurn[] = []
   let currentTurn: NormalizedTurn | null = null
 
@@ -94,7 +75,7 @@ async function loadClaudeSession(input: {
       }
 
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `claude:${turns.length}`,
         index: turns.length,
         provider: 'claude-code',
@@ -112,7 +93,7 @@ async function loadClaudeSession(input: {
 
     if (!currentTurn) {
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `claude:${turns.length}`,
         index: turns.length,
         provider: 'claude-code',
@@ -123,7 +104,7 @@ async function loadClaudeSession(input: {
     }
 
     appendTurnLine(currentTurn, entry.line)
-    appendAssistantContent(currentTurn, entry, input.filePath)
+    appendAssistantContent(currentTurn, entry, file.path)
   }
 
   const normalizedTurns = finalizeTurns(turns)
@@ -131,24 +112,38 @@ async function loadClaudeSession(input: {
   const startedAt = normalizedTurns[0]?.timestamp ?? entries[0]?.value?.timestamp ?? null
   const updatedAt =
     [...normalizedTurns].reverse().find((turn) => turn.timestamp)?.timestamp ??
-    input.updatedAt ??
-    null
+    new Date(file.fingerprint.mtimeMs).toISOString()
+  const projectDir = file.relativePath.split('/')[0] ?? ''
 
   return {
     ref: createSessionRef({
       cwd: null,
-      homeDirectory: input.homeDirectory || '/',
-      path: input.filePath,
-      project: input.project,
+      homeDirectory: '/',
+      idPath: file.relativePath,
+      path: file.path,
+      project: decodeProjectFromAgentDir(projectDir),
       source: 'claude-code',
       startedAt,
-      title: summary ?? displayNameFromPath(input.filePath),
+      title: summary ?? displayNameFromPath(file.path),
       updatedAt,
     }),
     cwd: null,
     warnings,
     turns: normalizedTurns,
   }
+}
+
+export function createSessionProvider(): SessionCatalogProvider {
+  return {
+    source: 'claude-code',
+    scan: async ({ homeDir }) => scanClaudeCodeSessions(homeDir),
+    index: indexClaudeCodeSession,
+    load: loadClaudeCodeSession,
+  }
+}
+
+export function createClaudeCodeProvider(): SessionCatalogProvider {
+  return createSessionProvider()
 }
 
 function extractUserText(entry: JsonLineEntry<ClaudeEntry>): string {

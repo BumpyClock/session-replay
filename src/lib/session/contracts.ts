@@ -106,13 +106,51 @@ export interface SessionProviderDiscoveryOptions {
   homeDir: string;
 }
 
+export interface SessionFileFingerprint {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface SessionFileRef {
+  source: SessionSource;
+  path: string;
+  relativePath: string;
+  fingerprint: SessionFileFingerprint;
+}
+
+export interface SessionSearchDoc {
+  metadataText: string;
+  transcriptText: string;
+}
+
+export interface IndexedSessionEntry {
+  file: SessionFileRef;
+  ref: SessionRef;
+  searchDoc: SessionSearchDoc;
+  warnings: SessionWarning[];
+}
+
+export interface SessionProviderScanOptions {
+  homeDir: string;
+}
+
+export interface SessionCatalogProvider {
+  readonly source: SessionSource;
+  scan(options: SessionProviderScanOptions): Promise<SessionFileRef[]>;
+  index(file: Readonly<SessionFileRef>): Promise<IndexedSessionEntry>;
+  load(file: Readonly<SessionFileRef>): Promise<NormalizedSession>;
+}
+
 /**
  * Readonly provider contract.
  * Implementations may discover files and fully load/normalize one session,
  * but must never mutate transcript files or derived server state.
  */
-export interface SessionProvider {
+export interface LegacySessionProvider {
   readonly source: SessionSource;
   discover(options: SessionProviderDiscoveryOptions): Promise<SessionRef[]>;
   load(ref: SessionRef): Promise<NormalizedSession>;
 }
+
+export type SessionProvider = SessionCatalogProvider | LegacySessionProvider;

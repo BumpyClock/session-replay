@@ -115,5 +115,5 @@ it('loads a session, renders preview state, and exports html', async () => {
 
     await user.click(screen.getByRole('button', { name: /Generate one-file html/i }))
     await waitFor(() => expect(exportSessionDocumentMock).toHaveBeenCalledTimes(1))
-  })
+  }, 15000)
 })

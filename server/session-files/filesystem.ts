@@ -11,6 +11,8 @@ export interface JsonLineEntry<T = unknown> {
 export interface SessionFileRecord {
   path: string;
   relativePath: string;
+  mtimeMs: number;
+  size: number;
   updatedAt: string | null;
 }
 
@@ -81,6 +83,8 @@ export async function listFilesRecursive(
     found.push({
       path: filePath,
       relativePath: normalizePathForId(relative(rootPath, filePath)),
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
       updatedAt: stats.mtime.toISOString(),
     });
   });

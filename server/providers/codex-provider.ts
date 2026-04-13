@@ -1,18 +1,31 @@
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
+import { SessionCatalogService } from '../catalog/session-catalog-service'
+import type { SessionCatalogProvider } from '../catalog/types'
 import type { JsonLineEntry } from '../session-files/filesystem.js'
 import { listFilesRecursive, readJsonLines } from '../session-files/index.js'
-import { ApiError } from '../api/errors'
+import type {
+  MaterializedReplaySession,
+  SessionLoadRequest,
+  SessionRef as ApiSessionRef,
+  SessionSearchRequest,
+} from '../../src/lib/api/contracts'
 import type {
   NormalizedSession,
   NormalizedTurn,
-  SessionProvider,
+  SessionFileRef,
   SessionRef,
+  SessionWarning,
 } from '../../src/lib/session/contracts.js'
-import { sessionMatchesQuery } from '../../src/lib/session'
+import {
+  createSessionStats,
+  toMaterializedReplaySession,
+} from '../../src/lib/session/materialize.js'
 import {
   appendTurnLine,
   attachToolResult,
+  createIndexedSessionEntry,
+  createSessionFileRef,
   createSessionRef,
   createTextBlock,
   createToolCall,
@@ -23,16 +36,6 @@ import {
   summarizeTurns,
   toolResultText,
 } from './shared.js'
-import {
-  toApiSessionRef,
-  toMaterializedReplaySession,
-} from '../../src/lib/session/materialize.js'
-import type {
-  MaterializedReplaySession,
-  SessionLoadRequest,
-  SessionRef as ApiSessionRef,
-  SessionSearchRequest,
-} from '../../src/lib/api/contracts'
 
 interface CodexEntry {
   item?: Record<string, unknown>
@@ -46,73 +49,34 @@ interface PatchToolSpec {
   name: string
 }
 
+interface CodexParseContext {
+  cwd: string | null
+  entries: JsonLineEntry<CodexEntry>[]
+  file: Readonly<SessionFileRef>
+  warnings: SessionWarning[]
+}
+
 export async function discoverCodexSessions(
   homeDirectory = resolveHomeDir(),
 ): Promise<readonly ApiSessionRef[]> {
-  const provider = createCodexProvider()
-  const refs = await provider.discover({ homeDir: homeDirectory })
-
-  return refs
-    .map((ref) => toApiSessionRef(ref))
-    .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
+  const refs = await createCodexCatalog(homeDirectory).listSessions()
+  return refs.map((ref) => toCodexApiSessionRef(ref))
 }
 
 export async function loadCodexSession(
   request: SessionLoadRequest & { homeDirectory?: string },
 ): Promise<MaterializedReplaySession> {
   const homeDirectory = request.homeDirectory ?? resolveHomeDir()
-  const provider = createCodexProvider()
-  const refs = await provider.discover({ homeDir: homeDirectory })
-  const target = resolveCodexSessionTarget(refs, request)
-
-  if (!target) {
-    throw new ApiError(404, 'session_not_found', 'Session not found')
-  }
-
-  const normalized = await provider.load(target)
-  return toMaterializedReplaySession(normalized)
+  const session = await createCodexCatalog(homeDirectory).loadSession(request)
+  return toMaterializedReplaySession(session)
 }
 
 export async function searchCodexSessions(
   homeDirectory: string,
   request: SessionSearchRequest,
 ): Promise<readonly ApiSessionRef[]> {
-  const query = request.query.trim().toLowerCase()
-  if (!query) {
-    return []
-  }
-
-  const provider = createCodexProvider()
-  const refs = await provider.discover({ homeDir: homeDirectory })
-  const found: ApiSessionRef[] = []
-
-  for (const ref of refs) {
-    const apiRef = toApiSessionRef(ref)
-    const haystack = [
-      apiRef.id,
-      apiRef.title,
-      apiRef.path,
-      apiRef.source,
-      apiRef.project,
-      apiRef.cwd,
-      apiRef.summary,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLocaleLowerCase()
-
-    if (haystack.includes(query)) {
-      found.push(apiRef)
-      continue
-    }
-
-    const normalized = await provider.load(ref)
-    if (sessionMatchesQuery(normalized, query)) {
-      found.push(toApiSessionRef(ref, normalized))
-    }
-  }
-
-  return request.limit ? found.slice(0, request.limit) : found
+  const refs = await createCodexCatalog(homeDirectory).searchSessions(request)
+  return refs.map((ref) => toCodexApiSessionRef(ref))
 }
 
 export async function createSessionSource({ homeDirectory = resolveHomeDir() } = {}): Promise<{
@@ -120,112 +84,145 @@ export async function createSessionSource({ homeDirectory = resolveHomeDir() } =
   loadSession(request: SessionLoadRequest): Promise<MaterializedReplaySession>
   searchSessions(request: SessionSearchRequest): Promise<readonly ApiSessionRef[]>
 }> {
+  const catalog = createCodexCatalog(homeDirectory)
+
   return {
-    listSessions: () => discoverCodexSessions(homeDirectory),
-    loadSession: (request) => loadCodexSession({ ...request, homeDirectory }),
-    searchSessions: (request) => searchCodexSessions(homeDirectory, request),
+    listSessions: async () => {
+      const refs = await catalog.listSessions()
+      return refs.map((ref) => toCodexApiSessionRef(ref))
+    },
+    loadSession: async (request) => {
+      const session = await catalog.loadSession(request)
+      return toMaterializedReplaySession(session)
+    },
+    searchSessions: async (request) => {
+      const refs = await catalog.searchSessions(request)
+      return refs.map((ref) => toCodexApiSessionRef(ref))
+    },
   }
 }
 
-function resolveCodexSessionTarget(
-  refs: readonly SessionRef[],
-  request: SessionLoadRequest,
-): SessionRef | null {
-  const target = request.path ?? request.sessionId
-  if (!target) {
-    return null
-  }
-
-  const direct = refs.find((ref) => ref.path === target || ref.id === target)
-  if (direct) {
-    return direct
-  }
-
-  const normalized = normalizeSessionToken(target)
-  const byId = refs.find((ref) => normalizeSessionToken(ref.id) === normalized)
-  if (byId) {
-    return byId
-  }
-
-  const byPath = refs.find((ref) => normalizeSessionToken(ref.path) === normalized)
-  if (byPath) {
-    return byPath
-  }
-
-  const withExt = target.endsWith('.jsonl') ? target : `${target}.jsonl`
-  return (
-    refs.find((ref) => basename(ref.path) === target) ??
-    refs.find((ref) => basename(ref.path) === withExt) ??
-    refs.find((ref) => basename(ref.path).replace(/\.jsonl$/i, '') === normalized)
-  )
-}
-
-function normalizeSessionToken(value: string): string {
-  return value.trim().toLowerCase().replace(/\.jsonl$/i, '')
+function createCodexCatalog(homeDirectory: string): SessionCatalogService {
+  return new SessionCatalogService({
+    homeDir: homeDirectory,
+    providers: [createSessionProvider()],
+  })
 }
 
 function resolveHomeDir(): string {
   return homedir()
 }
 
-export function createCodexProvider(): SessionProvider {
+export function createSessionProvider(): SessionCatalogProvider {
   return {
     source: 'codex',
-    discover: async ({ homeDir }) => {
+    scan: async ({ homeDir }) => {
       const rootPath = join(homeDir, '.codex', 'sessions')
       const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('.jsonl'))
-      const refs: SessionRef[] = []
-
-      for (const file of files) {
-        const session = await loadCodexSessionFromFile({
-          filePath: file.path,
-          homeDirectory: homeDir,
-          fallbackProject: basename(join(rootPath, file.relativePath.split('/').slice(0, 3).join('/'))),
-          updatedAt: file.updatedAt,
-        })
-        refs.push(session.ref)
-      }
-
-      return refs
+      return files.map((file) => createSessionFileRef('codex', file))
     },
-    load: async (ref) => {
-      return loadCodexSessionFromFile({
-        filePath: ref.path,
-        homeDirectory: '',
-        fallbackProject: ref.project,
-        updatedAt: ref.updatedAt,
-      })
+    index: async (file) => {
+      const session = await loadCodexCatalogSession(file)
+      return createIndexedSessionEntry(file, session)
     },
+    load: loadCodexCatalogSession,
   }
 }
 
-async function loadCodexSessionFromFile(input: {
-  fallbackProject: string
-  filePath: string
-  homeDirectory: string
-  updatedAt?: string | null
-}): Promise<NormalizedSession> {
-  const { entries, warnings } = await readJsonLines<CodexEntry>(input.filePath)
+export function createCodexProvider(): SessionCatalogProvider {
+  return createSessionProvider()
+}
 
-  if (entries.some((entry) => entry.value?.type === 'item.completed')) {
-    return loadModernCodexSession({
-      entries,
-      filePath: input.filePath,
-      homeDirectory: input.homeDirectory,
-      fallbackProject: input.fallbackProject,
-      updatedAt: input.updatedAt,
-      warnings,
-    })
+async function loadCodexCatalogSession(file: Readonly<SessionFileRef>): Promise<NormalizedSession> {
+  const { entries, warnings } = await readJsonLines<CodexEntry>(file.path)
+  const context: CodexParseContext = {
+    cwd: findCodexCwd(entries),
+    entries,
+    file,
+    warnings,
+  }
+  const turns = finalizeTurns(
+    hasModernCodexItems(entries) ? parseModernCodexTurns(context) : parseLegacyCodexTurns(context),
+  )
+  const summary = summarizeTurns(turns)
+  const startedAt = turns[0]?.timestamp ?? entries[0]?.value?.timestamp ?? null
+  const updatedAt =
+    [...turns].reverse().find((turn) => turn.timestamp)?.timestamp ??
+    new Date(file.fingerprint.mtimeMs).toISOString()
+
+  const ref: SessionRef = {
+    ...createSessionRef({
+      cwd: context.cwd,
+      homeDirectory: '/',
+      idPath: file.relativePath,
+      path: file.path,
+      project: pathProjectName(context.cwd, inferCodexProjectName(file)),
+      source: 'codex',
+      startedAt,
+      title: summary ?? displayNameFromPath(file.path),
+      updatedAt,
+    }),
+    summary: summary ?? displayNameFromPath(file.path),
   }
 
+  const session: NormalizedSession = {
+    ref,
+    cwd: context.cwd,
+    warnings,
+    turns,
+  }
+
+  session.ref.stats = createSessionStats(session)
+
+  return {
+    ref: session.ref,
+    cwd: context.cwd,
+    warnings,
+    turns,
+  }
+}
+
+function toCodexApiSessionRef(ref: Readonly<SessionRef>): ApiSessionRef {
+  return {
+    id: ref.id,
+    title: ref.title,
+    source: ref.source,
+    path: ref.path,
+    project: ref.project,
+    cwd: ref.cwd ?? undefined,
+    startedAt: ref.startedAt ?? undefined,
+    updatedAt: ref.updatedAt ?? undefined,
+    summary: ref.summary ?? ref.title,
+    stats: ref.stats,
+  }
+}
+
+function hasModernCodexItems(entries: readonly JsonLineEntry<CodexEntry>[]): boolean {
+  return entries.some((entry) => entry.value?.type === 'item.completed')
+}
+
+function findCodexCwd(entries: readonly JsonLineEntry<CodexEntry>[]): string | null {
+  for (const entry of entries) {
+    if (entry.value?.type !== 'session_meta') {
+      continue
+    }
+
+    const cwd = readCodexCwd(entry.value.payload)
+    if (cwd) {
+      return cwd
+    }
+  }
+
+  return null
+}
+
+function parseLegacyCodexTurns(context: Readonly<CodexParseContext>): NormalizedTurn[] {
   const turns: NormalizedTurn[] = []
   let currentTurn: NormalizedTurn | null = null
-  let discoveredCwd: string | null = null
 
-  for (const entry of entries) {
+  for (const entry of context.entries) {
     const type = entry.value?.type
     if (type === 'session_meta') {
-      discoveredCwd = readCodexCwd(entry.value?.payload) ?? discoveredCwd
       continue
     }
 
@@ -240,14 +237,7 @@ async function loadCodexSessionFromFile(input: {
           currentTurn = null
         }
         if (!currentTurn) {
-          currentTurn = createTurn({
-            filePath: input.filePath,
-            id: `codex:${turns.length}`,
-            index: turns.length,
-            provider: 'codex',
-            timestamp: entry.value?.timestamp ?? null,
-            userText: '',
-          })
+          currentTurn = createCodexTurn(context.file, turns.length, entry.value?.timestamp ?? null)
           appendTurnLine(currentTurn, entry.line)
           turns.push(currentTurn)
         }
@@ -256,14 +246,7 @@ async function loadCodexSessionFromFile(input: {
 
       if (payloadType === 'user_message') {
         if (!currentTurn) {
-          currentTurn = createTurn({
-            filePath: input.filePath,
-            id: `codex:${turns.length}`,
-            index: turns.length,
-            provider: 'codex',
-            timestamp: entry.value?.timestamp ?? null,
-            userText: '',
-          })
+          currentTurn = createCodexTurn(context.file, turns.length, entry.value?.timestamp ?? null)
           turns.push(currentTurn)
         }
 
@@ -283,45 +266,145 @@ async function loadCodexSessionFromFile(input: {
     }
 
     if (!currentTurn) {
-      currentTurn = createTurn({
-        filePath: input.filePath,
-        id: `codex:${turns.length}`,
-        index: turns.length,
-        provider: 'codex',
-        timestamp: entry.value?.timestamp ?? null,
-        userText: '',
-      })
+      currentTurn = createCodexTurn(context.file, turns.length, entry.value?.timestamp ?? null)
       turns.push(currentTurn)
     }
 
     appendTurnLine(currentTurn, entry.line)
-    appendLegacyCodexResponse(currentTurn, entry, input.filePath)
+    appendLegacyCodexResponse(currentTurn, entry, context.file.path)
   }
 
-  const normalizedTurns = finalizeTurns(turns)
-  const summary = summarizeTurns(normalizedTurns)
-  const project = pathProjectName(discoveredCwd, input.fallbackProject)
-  const startedAt = normalizedTurns[0]?.timestamp ?? entries[0]?.value?.timestamp ?? null
-  const updatedAt =
-    [...normalizedTurns].reverse().find((turn) => turn.timestamp)?.timestamp ??
-    input.updatedAt ??
-    null
+  return turns
+}
 
-  return {
-    ref: createSessionRef({
-      cwd: discoveredCwd,
-      homeDirectory: input.homeDirectory || '/',
-      path: input.filePath,
-      project,
-      source: 'codex',
-      startedAt,
-      title: summary ?? displayNameFromPath(input.filePath),
-      updatedAt,
-    }),
-    cwd: discoveredCwd,
-    warnings,
-    turns: normalizedTurns,
+function parseModernCodexTurns(context: Readonly<CodexParseContext>): NormalizedTurn[] {
+  const turn = createCodexTurn(context.file, 0, context.entries[0]?.value?.timestamp ?? null)
+
+  for (const entry of context.entries) {
+    if (entry.value?.type !== 'item.completed') {
+      continue
+    }
+
+    const item = entry.value.item
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    appendTurnLine(turn, entry.line)
+    const itemType = typeof item.type === 'string' ? item.type : ''
+
+    if (itemType === 'message' && item.role === 'user') {
+      const content = Array.isArray(item.content) ? item.content : []
+      const text = content
+        .map((part) => {
+          if (!part || typeof part !== 'object') {
+            return ''
+          }
+
+          return typeof (part as Record<string, unknown>).text === 'string'
+            ? String((part as Record<string, unknown>).text)
+            : ''
+        })
+        .filter(Boolean)
+        .join('\n\n')
+      turn.userText = extractCodexUserText(text)
+      continue
+    }
+
+    if (itemType === 'reasoning' && typeof item.text === 'string') {
+      const block = createTextBlock({
+        filePath: context.file.path,
+        id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
+        kind: 'thinking',
+        provider: 'codex',
+        text: item.text,
+        timestamp: entry.value?.timestamp ?? null,
+        line: entry.line,
+        rawTypes: ['item.completed', itemType],
+      })
+      if (block) {
+        turn.assistantBlocks.push(block)
+      }
+      continue
+    }
+
+    if ((itemType === 'agent_message' || itemType === 'message') && typeof item.text === 'string') {
+      const block = createTextBlock({
+        filePath: context.file.path,
+        id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
+        kind: 'text',
+        provider: 'codex',
+        text: item.text,
+        timestamp: entry.value?.timestamp ?? null,
+        line: entry.line,
+        rawTypes: ['item.completed', itemType],
+      })
+      if (block) {
+        turn.assistantBlocks.push(block)
+      }
+      continue
+    }
+
+    if (itemType === 'command_execution') {
+      turn.toolCalls.push(
+        createToolCall({
+          filePath: context.file.path,
+          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
+          input: { command: typeof item.command === 'string' ? item.command : '' },
+          isError: Number(item.exit_code ?? 0) !== 0,
+          name: 'Bash',
+          provider: 'codex',
+          result: typeof item.aggregated_output === 'string' ? item.aggregated_output : null,
+          resultTimestamp: entry.value?.timestamp ?? null,
+          timestamp: entry.value?.timestamp ?? null,
+          line: entry.line,
+          rawTypes: ['item.completed', itemType],
+        }),
+      )
+      continue
+    }
+
+    if (itemType === 'function_call') {
+      turn.toolCalls.push(
+        createToolCall({
+          filePath: context.file.path,
+          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
+          input: parseJsonString(item.arguments) ?? item.arguments,
+          isError: item.status === 'failed',
+          name: typeof item.name === 'string' ? item.name : 'function_call',
+          provider: 'codex',
+          result: typeof item.output === 'string' ? item.output : null,
+          resultTimestamp: entry.value?.timestamp ?? null,
+          timestamp: entry.value?.timestamp ?? null,
+          line: entry.line,
+          rawTypes: ['item.completed', itemType],
+        }),
+      )
+    }
   }
+
+  return [turn]
+}
+
+function createCodexTurn(
+  file: Readonly<SessionFileRef>,
+  index: number,
+  timestamp: string | null,
+): NormalizedTurn {
+  return createTurn({
+    filePath: file.path,
+    id: `codex:${index}`,
+    index,
+    provider: 'codex',
+    timestamp,
+    userText: '',
+  })
+}
+
+function inferCodexProjectName(file: Readonly<SessionFileRef>): string {
+  const displayName = displayNameFromPath(file.path)
+  const rolloutMatch = displayName.match(/^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$/iu)
+  return rolloutMatch?.[1]?.trim() || basename(file.relativePath.split('/')[0] ?? '') || 'session'
 }
 
 function hasTurnContent(turn: NormalizedTurn): boolean {
@@ -667,144 +750,4 @@ function parseApplyPatch(patchText: string): PatchToolSpec[] {
 
   pushCurrent()
   return specs
-}
-
-async function loadModernCodexSession(input: {
-  entries: JsonLineEntry<CodexEntry>[]
-  fallbackProject: string
-  filePath: string
-  homeDirectory: string
-  updatedAt?: string | null
-  warnings: NormalizedSession['warnings']
-}): Promise<NormalizedSession> {
-  const turn = createTurn({
-    filePath: input.filePath,
-    id: 'codex:0',
-    index: 0,
-    provider: 'codex',
-    timestamp: input.entries[0]?.value?.timestamp ?? null,
-    userText: '',
-  })
-
-  for (const entry of input.entries) {
-    if (entry.value?.type !== 'item.completed') {
-      continue
-    }
-
-    const item = entry.value.item
-    if (!item || typeof item !== 'object') {
-      continue
-    }
-
-    appendTurnLine(turn, entry.line)
-    const itemType = typeof item.type === 'string' ? item.type : ''
-
-    if (itemType === 'message' && item.role === 'user') {
-      const content = Array.isArray(item.content) ? item.content : []
-      const text = content
-        .map((part) => {
-          if (!part || typeof part !== 'object') {
-            return ''
-          }
-
-          return typeof (part as Record<string, unknown>).text === 'string'
-            ? String((part as Record<string, unknown>).text)
-            : ''
-        })
-        .filter(Boolean)
-        .join('\n\n')
-      turn.userText = extractCodexUserText(text)
-      continue
-    }
-
-    if (itemType === 'reasoning' && typeof item.text === 'string') {
-      const block = createTextBlock({
-        filePath: input.filePath,
-        id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
-        kind: 'thinking',
-        provider: 'codex',
-        text: item.text,
-        timestamp: entry.value?.timestamp ?? null,
-        line: entry.line,
-        rawTypes: ['item.completed', itemType],
-      })
-      if (block) {
-        turn.assistantBlocks.push(block)
-      }
-      continue
-    }
-
-    if ((itemType === 'agent_message' || itemType === 'message') && typeof item.text === 'string') {
-      const block = createTextBlock({
-        filePath: input.filePath,
-        id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
-        kind: 'text',
-        provider: 'codex',
-        text: item.text,
-        timestamp: entry.value?.timestamp ?? null,
-        line: entry.line,
-        rawTypes: ['item.completed', itemType],
-      })
-      if (block) {
-        turn.assistantBlocks.push(block)
-      }
-      continue
-    }
-
-    if (itemType === 'command_execution') {
-      turn.toolCalls.push(
-        createToolCall({
-          filePath: input.filePath,
-          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
-          input: { command: typeof item.command === 'string' ? item.command : '' },
-          isError: Number(item.exit_code ?? 0) !== 0,
-          name: 'Bash',
-          provider: 'codex',
-          result: typeof item.aggregated_output === 'string' ? item.aggregated_output : null,
-          resultTimestamp: entry.value?.timestamp ?? null,
-          timestamp: entry.value?.timestamp ?? null,
-          line: entry.line,
-          rawTypes: ['item.completed', itemType],
-        }),
-      )
-      continue
-    }
-
-    if (itemType === 'function_call') {
-      turn.toolCalls.push(
-        createToolCall({
-          filePath: input.filePath,
-          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
-          input: parseJsonString(item.arguments) ?? item.arguments,
-          isError: item.status === 'failed',
-          name: typeof item.name === 'string' ? item.name : 'function_call',
-          provider: 'codex',
-          result: typeof item.output === 'string' ? item.output : null,
-          resultTimestamp: entry.value?.timestamp ?? null,
-          timestamp: entry.value?.timestamp ?? null,
-          line: entry.line,
-          rawTypes: ['item.completed', itemType],
-        }),
-      )
-    }
-  }
-
-  const normalizedTurns = finalizeTurns([turn])
-  const summary = summarizeTurns(normalizedTurns)
-
-  return {
-    ref: createSessionRef({
-      cwd: null,
-      homeDirectory: input.homeDirectory || '/',
-      path: input.filePath,
-      project: input.fallbackProject,
-      source: 'codex',
-      startedAt: normalizedTurns[0]?.timestamp ?? null,
-      title: summary ?? displayNameFromPath(input.filePath),
-      updatedAt: input.updatedAt ?? null,
-    }),
-    cwd: null,
-    warnings: input.warnings,
-    turns: normalizedTurns,
-  }
 }

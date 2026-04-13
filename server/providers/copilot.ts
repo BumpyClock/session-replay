@@ -6,13 +6,16 @@ import {
   readJsonLines,
 } from '../session-files/index.js'
 import type {
+  IndexedSessionEntry,
   NormalizedSession,
   NormalizedTurn,
-  SessionProvider,
-  SessionRef,
+  SessionCatalogProvider,
+  SessionFileRef,
 } from '../../src/lib/session/contracts.js'
 import {
   appendTurnLine,
+  createIndexedSessionEntry,
+  createSessionFileRef,
   createSessionRef,
   createTextBlock,
   createToolCall,
@@ -32,108 +35,26 @@ interface CopilotEntry {
   type?: string
 }
 
-export interface CopilotLoadRequest {
-  homeDirectory: string
-  path: string
-  updatedAt?: string | null
+export async function scanCopilotSessions(homeDirectory: string): Promise<SessionFileRef[]> {
+  const rootPath = join(homeDirectory, '.copilot', 'session-state')
+  const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('events.jsonl'))
+  return files.map((file) => createSessionFileRef('copilot', file))
 }
 
-export interface CopilotSearchRequest {
-  homeDirectory: string
-  query: string
-  limit?: number
+export async function indexCopilotSession(
+  file: Readonly<SessionFileRef>,
+): Promise<IndexedSessionEntry> {
+  const session = await loadCopilotSession(file)
+  return createIndexedSessionEntry(file, session)
 }
 
-export async function discoverCopilotSessions(homeDirectory: string): Promise<SessionRef[]> {
-  const rootPath = join(homeDirectory, ".copilot", "session-state")
-  const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith("events.jsonl"))
-  const refs: SessionRef[] = []
-
-  for (const file of files) {
-    const session = await loadCopilotSession({
-      homeDirectory,
-      path: file.path,
-      updatedAt: file.updatedAt,
-    })
-    refs.push(session.ref)
-  }
-
-  return refs.sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
-  )
-}
-
-export async function loadCopilotSession({
-  homeDirectory,
-  path,
-  updatedAt = null,
-}: CopilotLoadRequest): Promise<NormalizedSession> {
-  return loadCopilotSessionFromFile({
-    homeDirectory,
-    filePath: path,
-    updatedAt,
-  })
-}
-
-export async function searchCopilotSessions({
-  homeDirectory,
-  query,
-  limit,
-}: CopilotSearchRequest): Promise<readonly SessionRef[]> {
-  const lowered = query.trim().toLowerCase()
-  if (!lowered) {
-    return []
-  }
-
-  const sessions = await discoverCopilotSessions(homeDirectory)
-  const results: SessionRef[] = []
-
-  for (const session of sessions) {
-    const metadataHaystack = [
-      session.id,
-      session.title,
-      session.path,
-      session.project,
-      session.cwd,
-      session.summary,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-
-    if (metadataHaystack.includes(lowered)) {
-      results.push(session)
-    }
-  }
-
-  return typeof limit === "number" ? results.slice(0, limit) : results
-}
-
-export function createCopilotProvider(): SessionProvider {
-  return {
-    source: 'copilot',
-    discover: async ({ homeDir }) => {
-      return discoverCopilotSessions(homeDir)
-    },
-    load: async (ref) => {
-      return loadCopilotSession({
-        homeDirectory: '',
-        updatedAt: ref.updatedAt,
-        path: ref.path,
-      })
-    },
-  }
-}
-
-async function loadCopilotSessionFromFile(input: {
-  filePath: string
-  homeDirectory: string
-  updatedAt?: string | null
-}): Promise<NormalizedSession> {
-  const { entries, warnings } = await readJsonLines<CopilotEntry>(input.filePath)
+export async function loadCopilotSession(
+  file: Readonly<SessionFileRef>,
+): Promise<NormalizedSession> {
+  const { entries, warnings } = await readJsonLines<CopilotEntry>(file.path)
   const turns: NormalizedTurn[] = []
   let currentTurn: NormalizedTurn | null = null
-  let cwd = await readWorkspaceCwd(input.filePath)
+  let cwd = await readWorkspaceCwd(file.path)
 
   for (const entry of entries) {
     const type = entry.value?.type
@@ -145,7 +66,7 @@ async function loadCopilotSessionFromFile(input: {
 
     if (type === 'user.message') {
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `copilot:${turns.length}`,
         index: turns.length,
         provider: 'copilot',
@@ -164,7 +85,7 @@ async function loadCopilotSessionFromFile(input: {
     appendTurnLine(currentTurn, entry.line)
 
     if (type === 'assistant.message') {
-      appendCopilotAssistantMessage(currentTurn, entry, input.filePath)
+      appendCopilotAssistantMessage(currentTurn, entry, file.path)
       continue
     }
 
@@ -178,31 +99,32 @@ async function loadCopilotSessionFromFile(input: {
   const startedAt = normalizedTurns[0]?.timestamp ?? entries[0]?.value?.timestamp ?? null
   const updatedAt =
     [...normalizedTurns].reverse().find((turn) => turn.timestamp)?.timestamp ??
-    input.updatedAt ??
-    null
-  const ref = createSessionRef({
-    cwd,
-    homeDirectory: input.homeDirectory || '/',
-    path: input.filePath,
-    project: pathProjectName(cwd, displayNameFromPath(input.filePath)),
-    source: 'copilot',
-    startedAt,
-    title: summary ?? displayNameFromPath(input.filePath),
-    updatedAt,
-  })
+    new Date(file.fingerprint.mtimeMs).toISOString()
 
   return {
-    source: 'copilot',
-    ref,
-    id: ref.id,
-    title: ref.title,
-    project: ref.project,
+    ref: createSessionRef({
+      cwd,
+      homeDirectory: '/',
+      idPath: file.relativePath,
+      path: file.path,
+      project: pathProjectName(cwd, displayNameFromPath(file.path)),
+      source: 'copilot',
+      startedAt,
+      title: summary ?? displayNameFromPath(file.path),
+      updatedAt,
+    }),
     cwd,
     warnings,
-    summary,
-    startedAt: ref.startedAt,
-    updatedAt: ref.updatedAt,
     turns: normalizedTurns,
+  }
+}
+
+export function createCopilotProvider(): SessionCatalogProvider {
+  return {
+    source: 'copilot',
+    scan: async ({ homeDir }) => scanCopilotSessions(homeDir),
+    index: indexCopilotSession,
+    load: loadCopilotSession,
   }
 }
 
@@ -295,7 +217,10 @@ function appendCopilotAssistantMessage(
     turn.toolCalls.push(
       createToolCall({
         filePath,
-        id: typeof record.toolCallId === 'string' ? record.toolCallId : `${turn.id}:tool:${turn.toolCalls.length}`,
+        id:
+          typeof record.toolCallId === 'string'
+            ? record.toolCallId
+            : `${turn.id}:tool:${turn.toolCalls.length}`,
         input: normalized.input,
         name: normalized.name,
         provider: 'copilot',

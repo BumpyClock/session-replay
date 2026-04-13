@@ -2,13 +2,16 @@ import { join } from 'node:path'
 import type { JsonLineEntry } from '../session-files/filesystem.js'
 import { listFilesRecursive, readJsonLines } from '../session-files/index.js'
 import type {
+  IndexedSessionEntry,
   NormalizedSession,
   NormalizedTurn,
-  SessionProvider,
-  SessionRef,
+  SessionCatalogProvider,
+  SessionFileRef,
 } from '../../src/lib/session/contracts.js'
 import {
   appendTurnLine,
+  createIndexedSessionEntry,
+  createSessionFileRef,
   createSessionRef,
   createTextBlock,
   createTurn,
@@ -28,57 +31,28 @@ interface CursorEntry {
   timestamp?: string
 }
 
-export function createCursorProvider(): SessionProvider {
-  return {
-    source: 'cursor',
-    discover: async ({ homeDir }) => {
-      const rootPath = join(homeDir, '.cursor', 'projects')
-      const files = await listFilesRecursive(rootPath, (filePath) => {
-        if (!filePath.endsWith('.jsonl')) {
-          return false
-        }
+export async function scanCursorSessions(homeDirectory: string): Promise<SessionFileRef[]> {
+  const rootPath = join(homeDirectory, '.cursor', 'projects')
+  const files = await listFilesRecursive(rootPath, (filePath) => {
+    if (!filePath.endsWith('.jsonl')) {
+      return false
+    }
 
-        return filePath.includes('/agent-transcripts/') || filePath.includes('\\agent-transcripts\\')
-      })
+    return filePath.includes('/agent-transcripts/') || filePath.includes('\\agent-transcripts\\')
+  })
 
-      const refs: SessionRef[] = []
-      for (const file of files) {
-        const relativeParts = file.relativePath.split('/')
-        const projectDir = relativeParts[0] ?? ''
-
-        if (!relativeParts.includes('agent-transcripts')) {
-          continue
-        }
-
-        const session = await loadCursorSession({
-          filePath: file.path,
-          homeDirectory: homeDir,
-          project: decodeProjectFromAgentDir(projectDir),
-          updatedAt: file.updatedAt,
-        })
-        refs.push(session.ref)
-      }
-
-      return refs
-    },
-    load: async (ref) => {
-      return loadCursorSession({
-        filePath: ref.path,
-        homeDirectory: '',
-        project: ref.project,
-        updatedAt: ref.updatedAt,
-      })
-    },
-  }
+  return files.map((file) => createSessionFileRef('cursor', file))
 }
 
-async function loadCursorSession(input: {
-  filePath: string
-  homeDirectory: string
-  project: string
-  updatedAt?: string | null
-}): Promise<NormalizedSession> {
-  const { entries, warnings } = await readJsonLines<CursorEntry>(input.filePath)
+export async function indexCursorSession(
+  file: Readonly<SessionFileRef>,
+): Promise<IndexedSessionEntry> {
+  const session = await loadCursorSession(file)
+  return createIndexedSessionEntry(file, session)
+}
+
+export async function loadCursorSession(file: Readonly<SessionFileRef>): Promise<NormalizedSession> {
+  const { entries, warnings } = await readJsonLines<CursorEntry>(file.path)
   const turns: NormalizedTurn[] = []
   let currentTurn: NormalizedTurn | null = null
 
@@ -91,7 +65,7 @@ async function loadCursorSession(input: {
       }
 
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `cursor:${turns.length}`,
         index: turns.length,
         provider: 'cursor',
@@ -109,7 +83,7 @@ async function loadCursorSession(input: {
 
     if (!currentTurn) {
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `cursor:${turns.length}`,
         index: turns.length,
         provider: 'cursor',
@@ -123,7 +97,7 @@ async function loadCursorSession(input: {
     const texts = extractTextFragments(entry.value?.message?.content)
     for (const text of texts) {
       const block = createTextBlock({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `${currentTurn.id}:assistant:${currentTurn.assistantBlocks.length}`,
         kind: 'text',
         provider: 'cursor',
@@ -140,21 +114,32 @@ async function loadCursorSession(input: {
 
   const normalizedTurns = finalizeTurns(turns).map(reclassifyCursorThinking)
   const summary = summarizeTurns(normalizedTurns)
+  const projectDir = file.relativePath.split('/')[0] ?? ''
 
   return {
     ref: createSessionRef({
       cwd: null,
-      homeDirectory: input.homeDirectory || '/',
-      path: input.filePath,
-      project: input.project,
+      homeDirectory: '/',
+      idPath: file.relativePath,
+      path: file.path,
+      project: decodeProjectFromAgentDir(projectDir),
       source: 'cursor',
       startedAt: normalizedTurns[0]?.timestamp ?? null,
-      title: summary ?? displayNameFromPath(input.filePath),
-      updatedAt: input.updatedAt ?? null,
+      title: summary ?? displayNameFromPath(file.path),
+      updatedAt: new Date(file.fingerprint.mtimeMs).toISOString(),
     }),
     cwd: null,
     warnings,
     turns: normalizedTurns,
+  }
+}
+
+export function createCursorProvider(): SessionCatalogProvider {
+  return {
+    source: 'cursor',
+    scan: async ({ homeDir }) => scanCursorSessions(homeDir),
+    index: indexCursorSession,
+    load: loadCursorSession,
   }
 }
 

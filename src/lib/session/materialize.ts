@@ -31,8 +31,8 @@ export function toApiSessionRef(
   ref: SessionRef,
   session?: NormalizedSession,
 ): ApiSessionRef {
-  const summary = session ? summarizeNormalizedSession(session) : ref.title;
-  const stats = session ? createSessionStats(session) : undefined;
+  const summary = session ? summarizeNormalizedSession(session) : ref.summary ?? ref.title;
+  const stats = session ? createSessionStats(session) : ref.stats;
 
   return {
     id: ref.id,

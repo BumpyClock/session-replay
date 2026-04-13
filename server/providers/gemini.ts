@@ -1,12 +1,15 @@
 import { basename, dirname, join } from 'node:path'
 import { listFilesRecursive, readJsonFile } from '../session-files/index.js'
 import type {
+  IndexedSessionEntry,
   NormalizedSession,
   NormalizedTurn,
-  SessionProvider,
-  SessionRef,
+  SessionCatalogProvider,
+  SessionFileRef,
 } from '../../src/lib/session/contracts.js'
 import {
+  createIndexedSessionEntry,
+  createSessionFileRef,
   createSessionRef,
   createTextBlock,
   createToolCall,
@@ -45,45 +48,34 @@ interface GeminiMessage {
   type?: string
 }
 
-export function createGeminiProvider(): SessionProvider {
-  return {
-    source: 'gemini',
-    discover: async ({ homeDir }) => {
-      const rootPath = join(homeDir, '.gemini', 'tmp')
-      const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('.json') && (filePath.includes('/chats/') || filePath.includes('\\chats\\')))
-      const refs: SessionRef[] = []
+export async function scanGeminiSessions(homeDirectory: string): Promise<SessionFileRef[]> {
+  const rootPath = join(homeDirectory, '.gemini', 'tmp')
+  const files = await listFilesRecursive(
+    rootPath,
+    (filePath) =>
+      filePath.endsWith('.json') &&
+      (filePath.includes('/chats/') || filePath.includes('\\chats\\')),
+  )
 
-      for (const file of files) {
-        const session = await loadGeminiSession({
-          filePath: file.path,
-          homeDirectory: homeDir,
-        })
-        refs.push(session.ref)
-      }
-
-      return refs
-    },
-    load: async (ref) => {
-      return loadGeminiSession({
-        filePath: ref.path,
-        homeDirectory: '',
-      })
-    },
-  }
+  return files.map((file) => createSessionFileRef('gemini', file))
 }
 
-async function loadGeminiSession(input: {
-  filePath: string
-  homeDirectory: string
-}): Promise<NormalizedSession> {
-  const file = await readJsonFile<GeminiFile>(input.filePath)
+export async function indexGeminiSession(
+  file: Readonly<SessionFileRef>,
+): Promise<IndexedSessionEntry> {
+  const session = await loadGeminiSession(file)
+  return createIndexedSessionEntry(file, session)
+}
+
+export async function loadGeminiSession(file: Readonly<SessionFileRef>): Promise<NormalizedSession> {
+  const payload = await readJsonFile<GeminiFile>(file.path)
   const turns: NormalizedTurn[] = []
   let currentTurn: NormalizedTurn | null = null
 
-  for (const message of file.messages ?? []) {
+  for (const message of payload.messages ?? []) {
     if (message.type === 'user') {
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `gemini:${turns.length}`,
         index: turns.length,
         provider: 'gemini',
@@ -100,7 +92,7 @@ async function loadGeminiSession(input: {
 
     if (!currentTurn) {
       currentTurn = createTurn({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `gemini:${turns.length}`,
         index: turns.length,
         provider: 'gemini',
@@ -113,7 +105,7 @@ async function loadGeminiSession(input: {
     for (const thought of message.thoughts ?? []) {
       const text = [thought.subject, thought.description].filter(Boolean).join('\n\n')
       const block = createTextBlock({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `${currentTurn.id}:assistant:${currentTurn.assistantBlocks.length}`,
         kind: 'thinking',
         provider: 'gemini',
@@ -130,7 +122,7 @@ async function loadGeminiSession(input: {
       const normalized = normalizeGeminiTool(toolCall)
       currentTurn.toolCalls.push(
         createToolCall({
-          filePath: input.filePath,
+          filePath: file.path,
           id: normalized.id,
           input: normalized.input,
           isError: normalized.isError,
@@ -146,7 +138,7 @@ async function loadGeminiSession(input: {
 
     if (message.content?.trim()) {
       const block = createTextBlock({
-        filePath: input.filePath,
+        filePath: file.path,
         id: `${currentTurn.id}:assistant:${currentTurn.assistantBlocks.length}`,
         kind: 'text',
         provider: 'gemini',
@@ -163,24 +155,37 @@ async function loadGeminiSession(input: {
   const normalizedTurns = finalizeTurns(turns)
   const summary = summarizeTurns(normalizedTurns)
   const project =
-    basename(dirname(dirname(input.filePath))).slice(0, 12) ||
-    file.projectHash?.slice(0, 12) ||
-    displayNameFromPath(input.filePath)
+    basename(dirname(dirname(file.path))).slice(0, 12) ||
+    payload.projectHash?.slice(0, 12) ||
+    displayNameFromPath(file.path)
 
   return {
     ref: createSessionRef({
       cwd: null,
-      homeDirectory: input.homeDirectory || '/',
-      path: input.filePath,
+      homeDirectory: '/',
+      idPath: file.relativePath,
+      path: file.path,
       project,
       source: 'gemini',
-      startedAt: file.startTime ?? normalizedTurns[0]?.timestamp ?? null,
-      title: summary ?? displayNameFromPath(input.filePath),
-      updatedAt: file.lastUpdated ?? normalizedTurns.at(-1)?.timestamp ?? null,
+      startedAt: payload.startTime ?? normalizedTurns[0]?.timestamp ?? null,
+      title: summary ?? displayNameFromPath(file.path),
+      updatedAt:
+        payload.lastUpdated ??
+        normalizedTurns.at(-1)?.timestamp ??
+        new Date(file.fingerprint.mtimeMs).toISOString(),
     }),
     cwd: null,
     warnings: [],
     turns: normalizedTurns,
+  }
+}
+
+export function createGeminiProvider(): SessionCatalogProvider {
+  return {
+    source: 'gemini',
+    scan: async ({ homeDir }) => scanGeminiSessions(homeDir),
+    index: indexGeminiSession,
+    load: loadGeminiSession,
   }
 }
 
@@ -209,7 +214,8 @@ function normalizeGeminiTool(toolCall: NonNullable<GeminiMessage['toolCalls']>[n
   const response = findGeminiFunctionResponse(toolCall.result)
   const output = toolResultText(response?.output)
   const error = toolResultText(response?.error)
-  const result = [output, error && error !== '(none)' ? error : null].filter(Boolean).join('\n\n') || null
+  const result =
+    [output, error && error !== '(none)' ? error : null].filter(Boolean).join('\n\n') || null
   const exitCode = Number(response?.exitCode ?? 0)
 
   return {
