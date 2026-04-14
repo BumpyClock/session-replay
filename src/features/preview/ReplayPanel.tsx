@@ -34,8 +34,18 @@ import {
   type ReplaySegment,
 } from '../../lib/replay/segments'
 import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../lib/replay/context-blocks'
+import {
+  createReplayPlaybackTurns,
+  DEFAULT_PLAYBACK_SPEED,
+  getActivePlaybackUnitId,
+  getNextPlaybackDelay,
+  getNextPlaybackState,
+  getPreviousPlaybackState,
+  PLAYBACK_SPEEDS,
+} from '../../lib/replay/playback'
+import type { ReplayRole } from '../../lib/api/contracts'
 
-export type PreviewTurnRole = 'user' | 'assistant' | 'system' | 'tool'
+export type PreviewTurnRole = ReplayRole
 
 /** Playback-ready turn shape used by the editor preview panel. */
 export type PreviewTurn = {
@@ -84,22 +94,7 @@ const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
   tool: Wrench,
 }
 
-const PLAYBACK_SPEEDS = [1, 2, 4, 8] as const
-const DEFAULT_PLAYBACK_SPEED = 4
-const PLAYBACK_TURN_DWELL_MS = 420
-
 type PlaybackMode = 'idle' | 'paused' | 'playing'
-
-type PlaybackUnit = {
-  delayMs: number
-  id: string
-}
-
-type PlaybackTurnPlan = {
-  role: PreviewTurnRole
-  turnId: string
-  units: PlaybackUnit[]
-}
 
 function ReplayPanel({
   canExport,
@@ -149,15 +144,9 @@ function ReplayPanel({
   }, [session?.id])
 
   const playbackTurns = useMemo(
-    () =>
-      session?.turns
-        .filter((turn) => !turn.isHidden)
-        .map((turn) => ({
-          role: turn.role,
-          turnId: turn.id,
-          // User turns stay instantaneous; only assistant/tool output replays in paced steps.
-          units: turn.role === 'user' ? [] : createReplaySegments(turn.blocks).flatMap(getReplaySegmentPlaybackUnits),
-        })) ?? [],
+    // Hidden turns stay editable in full session list, but playback pacing only
+    // tracks visible turns. This separate map bridges session order to playback order.
+    () => createReplayPlaybackTurns(session?.turns.filter((turn) => !turn.isHidden) ?? []),
     [session],
   )
   const playbackTurnIndexById = useMemo(
@@ -330,25 +319,30 @@ function ReplayPanel({
 
   return (
     <section className="preview-block" aria-live="polite">
-      <header className="preview-block__header">
-        <div>
-          <p className="eyebrow">Replay preview</p>
-          <h2>{session ? 'Session playback' : 'Select a session'}</h2>
-        </div>
-        <div className="preview-block__meta">
-          <div className="preview-block__count">
-            <Clock size={14} strokeWidth={1.8} />
-            {visibleCount}/{totalCount} visible
+      <div
+        ref={contentRef}
+        className={`preview-block__content preview-block__content--chat${session ? '' : ' preview-block__content--idle'}`}
+      >
+        <header className="preview-block__header">
+          <div className="preview-block__title-group">
+            <h2>{session ? 'Session playback' : 'Preview ready'}</h2>
+            {session ? <p className="preview-block__details">{formatTurnCount(totalCount)}</p> : null}
           </div>
-        </div>
-      </header>
+          {session ? (
+            <div className="preview-block__meta">
+              <div className="preview-block__count">
+                <Clock size={14} strokeWidth={1.8} />
+                {visibleCount}/{totalCount} visible
+              </div>
+            </div>
+          ) : null}
+        </header>
 
-      <div ref={contentRef} className="preview-block__content preview-block__content--chat">
         {!session ? (
-          <div className="preview-block__empty">
-            <p>No session selected.</p>
+          <div className="preview-block__empty" role="status">
+            <h3>Choose a session from the library</h3>
             <p className="preview-block__hint">
-              Pick a session from the browser rail to preview timeline turns
+              Open any conversation in the browser rail to inspect tool calls, thinking blocks, and timeline turns.
             </p>
           </div>
         ) : (
@@ -363,14 +357,16 @@ function ReplayPanel({
                 return null
               }
 
-              const Icon = roleIconMap[turn.role]
-              const turnTone = getReplayTurnTone(turn)
-              const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < playbackTurnIndex
-              const isPlaybackActive = playbackStarted && playbackIndex === playbackTurnIndex
-              const playbackTurn = playbackIndex === undefined ? undefined : playbackTurns[playbackIndex]
-              const turnVisibleUnitIds =
-                !playbackStarted || playbackTurn === undefined || isPlaybackPast || (isPlaybackActive && turn.role === 'user')
-                  ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
+               const Icon = roleIconMap[turn.role]
+               const turnTone = getReplayTurnTone(turn)
+               const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < playbackTurnIndex
+               const isPlaybackActive = playbackStarted && playbackIndex === playbackTurnIndex
+               const playbackTurn = playbackIndex === undefined ? undefined : playbackTurns[playbackIndex]
+               // Past turns reveal everything, future turns reveal nothing, active
+               // user turns reveal instantly, active assistant/tool turns reveal unit-by-unit.
+               const turnVisibleUnitIds =
+                 !playbackStarted || playbackTurn === undefined || isPlaybackPast || (isPlaybackActive && turn.role === 'user')
+                   ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
                   : isPlaybackActive
                     ? revealedUnitIds
                     : new Set<string>()
@@ -590,6 +586,10 @@ function ReplayPanel({
   )
 }
 
+function formatTurnCount(value: number): string {
+  return `${value} ${value === 1 ? 'turn' : 'turns'}`
+}
+
 function formatPreviewRoleLabel(role: PreviewTurnRole): string {
   return `${role}:`.toUpperCase()
 }
@@ -771,146 +771,6 @@ function ReplayBlockDisclosure({
       />
     </details>
   )
-}
-
-function getReplaySegmentPlaybackUnits(segment: ReplaySegment): PlaybackUnit[] {
-  if (segment.type === 'block') {
-    return [
-      {
-        delayMs: estimateReplayBlockDelay(segment.block),
-        id: segment.block.id,
-      },
-    ]
-  }
-
-  return segment.blocks.map((block) => ({
-    delayMs: estimateReplayBlockDelay(block),
-    id: block.id,
-  }))
-}
-
-function estimateReplayBlockDelay(block: ReplayRenderableBlock): number {
-  // Preview pacing is heuristic UX timing, not source-of-truth protocol timing.
-  if (block.type === 'tool') {
-    return clampDelay(280)
-  }
-
-  if (block.type === 'thinking') {
-    return clampDelay(block.text.length * 8)
-  }
-
-  if (block.type === 'meta') {
-    return clampDelay((block.body?.length ?? block.title.length) * 6)
-  }
-
-  return clampDelay(block.text.length * 10)
-}
-
-function clampDelay(value: number): number {
-  return Math.min(Math.max(value, 140), 900)
-}
-
-function getNextPlaybackDelay(
-  turns: readonly PlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-  playbackSpeed: number,
-): number | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
-  if (nextUnit) {
-    return Math.max(60, Math.round(nextUnit.delayMs / playbackSpeed))
-  }
-
-  if (turnIndex < turns.length - 1) {
-    return Math.max(120, Math.round(PLAYBACK_TURN_DWELL_MS / playbackSpeed))
-  }
-
-  return null
-}
-
-function getNextPlaybackState(
-  turns: readonly PlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-): { revealedUnitIds: Set<string>; turnIndex: number } | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
-  if (nextUnit) {
-    const nextVisibleUnitIds = new Set(visibleUnitIds)
-    nextVisibleUnitIds.add(nextUnit.id)
-    return {
-      revealedUnitIds: nextVisibleUnitIds,
-      turnIndex,
-    }
-  }
-
-  if (turnIndex < turns.length - 1) {
-    return {
-      revealedUnitIds: new Set(visibleUnitIds),
-      turnIndex: turnIndex + 1,
-    }
-  }
-
-  return null
-}
-
-function getPreviousPlaybackState(
-  turns: readonly PlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-): { revealedUnitIds: Set<string>; turnIndex: number } | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  for (let index = currentTurn.units.length - 1; index >= 0; index -= 1) {
-    const unit = currentTurn.units[index]
-    if (unit && visibleUnitIds.has(unit.id)) {
-      const nextVisibleUnitIds = new Set(visibleUnitIds)
-      nextVisibleUnitIds.delete(unit.id)
-      return {
-        revealedUnitIds: nextVisibleUnitIds,
-        turnIndex,
-      }
-    }
-  }
-
-  if (turnIndex > 0) {
-    return {
-      revealedUnitIds: new Set(visibleUnitIds),
-      turnIndex: turnIndex - 1,
-    }
-  }
-
-  return null
-}
-
-function getActivePlaybackUnitId(
-  turn: PlaybackTurnPlan | undefined,
-  visibleUnitIds: ReadonlySet<string>,
-): string | null {
-  if (!turn) {
-    return null
-  }
-
-  for (let index = turn.units.length - 1; index >= 0; index -= 1) {
-    const candidate = turn.units[index]
-    if (candidate && visibleUnitIds.has(candidate.id)) {
-      return candidate.id
-    }
-  }
-
-  return null
 }
 
 function getVisibleReplayToolRunBlocks(

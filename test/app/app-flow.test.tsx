@@ -104,6 +104,7 @@ describe('App flow', () => {
 
     await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1))
     await screen.findByRole('button', { name: /sample session/i })
+    expect(screen.queryByText('Select session to begin')).not.toBeInTheDocument()
 
     await user.click(await screen.findByRole('button', { name: /sample session/i }))
     await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))

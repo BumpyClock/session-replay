@@ -506,11 +506,10 @@ function App() {
 
         <SidebarInset className="app-main">
           <main className="preview-workspace app-main__preview">
-            {sessionLoading || sessionError || (!loadedSession && !sessionLoading) || (!sessionsLoading && !sessionsError && !sessions.length) ? (
+            {sessionLoading || sessionError || (!sessionsLoading && !sessionsError && !sessions.length) ? (
               <div className="toolbar-grid" aria-live="polite">
                 {sessionLoading ? <span className="toolbar-chip">Loading selected session…</span> : null}
                 {sessionError ? <span className="toolbar-chip">{sessionError}</span> : null}
-                {!loadedSession && !sessionLoading ? <span className="toolbar-chip">Select session to begin</span> : null}
                 {!sessionsLoading && !sessionsError && !sessions.length ? (
                   <span className="toolbar-chip">No sessions discovered</span>
                 ) : null}

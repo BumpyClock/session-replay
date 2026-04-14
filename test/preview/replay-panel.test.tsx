@@ -96,6 +96,31 @@ const session: ReplaySession = {
 }
 
 describe('ReplayPanel', () => {
+  it('renders a single refined empty state when no session is selected', () => {
+    render(
+      <ReplayPanel
+        canExport
+        onExport={vi.fn()}
+        session={null}
+        totalCount={0}
+        visibleCount={0}
+        onBookmarkChange={vi.fn()}
+        onOpenExportSettings={vi.fn()}
+        onOpenPreview={vi.fn()}
+        onToggleTurnIncluded={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Preview ready' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: 'Choose a session from the library' })).toBeInTheDocument()
+    expect(
+      screen.getByText('Open any conversation in the browser rail to inspect tool calls, thinking blocks, and timeline turns.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('0/0 visible')).not.toBeInTheDocument()
+    expect(screen.queryByText('Replay preview')).not.toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: 'Playback controls' })).not.toBeInTheDocument()
+  })
+
   it('renders markdown html inside session playback cards', () => {
     const onBookmarkChange = vi.fn()
     const onExport = vi.fn()
@@ -121,6 +146,8 @@ describe('ReplayPanel', () => {
     expect(screen.getAllByText('Need review replay UX.').length).toBeGreaterThan(0)
     expect(screen.getByText('Skill context')).toBeInTheDocument()
     expect(screen.getByText('ux-designer')).toBeInTheDocument()
+    expect(screen.getByText('3 turns')).toBeInTheDocument()
+    expect(screen.queryByText('Replay preview')).not.toBeInTheDocument()
     expect(screen.getByText('ASSISTANT:')).toBeInTheDocument()
     expect(screen.getByText('Keep this tool result')).toBeInTheDocument()
     expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()

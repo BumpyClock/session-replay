@@ -94,7 +94,7 @@ function createFixtureSession(): MaterializedReplaySession {
 }
 
 describe('renderReplayDocument', () => {
-  it('renumbers filtered turns and bookmark targets after export filtering', () => {
+  it('uses the same preview shell as the in-editor playback view', () => {
     const html = renderReplayDocument(createFixtureSession(), {
       includeThinking: false,
       initialTurnIndex: 2,
@@ -104,9 +104,15 @@ describe('renderReplayDocument', () => {
     expect(html).toContain('data-turn-index="1"')
     expect(html).not.toContain('data-turn-index="2"')
     expect(html).not.toContain('Thinking step')
-    expect(html).toContain('<button class="bookmark" data-turn-index="1" type="button">Answer</button>')
-    expect(html).toContain('value="1"')
-    expect(html).toContain('<article class="turn-panel turn-panel--tool is-active" data-turn-index="1" >')
+    expect(html).toContain('class="preview-block preview-block--export"')
+    expect(html).toContain('class="preview-block__dock" role="toolbar" aria-label="Playback controls"')
+    expect(html).toContain('class="replay-turn replay-turn--tool"')
+    expect(html).toContain('class="replay-turn__note-pill"')
+    expect(html).toContain('Answer')
+    expect(html).not.toContain('class="hero"')
+    expect(html).not.toContain('class="content-grid"')
+    expect(html).not.toContain('data-action="expand-all"')
+    expect(html).not.toContain('data-action="collapse-all"')
   })
 
   it('applies revealThinking and keepTimestamps to rendered output', () => {
@@ -117,17 +123,14 @@ describe('renderReplayDocument', () => {
     })
 
     expect(hiddenThinkingHtml).toContain('Sensitive chain of thought')
-    expect(hiddenThinkingHtml).toContain('id="toggle-thinking" type="checkbox"')
-    expect(hiddenThinkingHtml).not.toContain('id="toggle-thinking" type="checkbox" checked')
     expect(hiddenThinkingHtml).not.toContain('2026-04-13T08:00:01.000Z')
-    expect(hiddenThinkingHtml).not.toContain('<time>')
+    expect(hiddenThinkingHtml).not.toContain('<time class="replay-turn__timestamp"')
     expect(hiddenThinkingHtml).toContain('Tool: Read')
-    expect(hiddenThinkingHtml).toContain('data-action="expand-all"')
-    expect(hiddenThinkingHtml).toContain('data-action="collapse-all"')
     expect(hiddenThinkingHtml).toContain('completed · src/App.tsx')
-    expect(hiddenThinkingHtml).toContain('turn-panel turn-panel--tool')
-    expect(hiddenThinkingHtml).toContain('turn-bookmark-note')
+    expect(hiddenThinkingHtml).toContain('class="replay-turn replay-turn--tool"')
+    expect(hiddenThinkingHtml).toContain('class="replay-turn__note-pill"')
     expect(hiddenThinkingHtml).toContain('Answer')
+    expect(hiddenThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--thinking" data-replay-kind="thinking">')
 
     const revealedThinkingHtml = renderReplayDocument(createFixtureSession(), {
       includeThinking: true,
@@ -136,14 +139,14 @@ describe('renderReplayDocument', () => {
     })
 
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
-    expect(revealedThinkingHtml).toContain('id="toggle-thinking" type="checkbox" checked')
     expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
-    expect(revealedThinkingHtml).toContain('<time class="turn-header-time">2026-04-13T08:00:01.000Z</time>')
-    expect(revealedThinkingHtml).toContain('<details class="turn-block turn-block--tool" data-replay-kind="tool">')
+    expect(revealedThinkingHtml).toContain('<time class="replay-turn__timestamp" datetime="2026-04-13T08:00:01.000Z">')
+    expect(revealedThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--thinking" open data-replay-kind="thinking">')
+    expect(revealedThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--tool" data-replay-kind="tool">')
     expect(revealedThinkingHtml).toContain('Skill context')
     expect(revealedThinkingHtml).toContain('ux-designer')
     expect(revealedThinkingHtml).not.toContain('&lt;skill-context')
-    expect(revealedThinkingHtml).toContain('turn-item-bookmark')
+    expect(revealedThinkingHtml).toContain('class="replay-turn__bookmark"')
   })
 
   it('filters tool blocks when export disables tool call rendering', () => {
@@ -199,7 +202,7 @@ describe('renderReplayDocument', () => {
       includeToolCalls: true,
     })
 
-    expect(html).toContain('class="turn-tool-group" data-replay-kind="tool"')
+    expect(html).toContain('class="replay-tool-group"')
     expect(html).toContain('>5 tool calls<')
     expect(html).toContain('Read, Bash')
     expect(html).toContain('1 failed')
@@ -234,9 +237,9 @@ describe('renderReplayDocument', () => {
       includeToolCalls: true,
     })
 
-    expect(html).toContain('class="turn-tool-group" data-replay-kind="tool"')
+    expect(html).toContain('class="replay-tool-group"')
     expect(html).toContain('>2 tool calls<')
     expect(html).toContain('Read, Bash')
-    expect(html).not.toContain('class="turn-tool-run"')
+    expect(html).not.toContain('data-action="toggle-thinking"')
   })
 })
