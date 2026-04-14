@@ -49,8 +49,7 @@ interface ParsedTurn {
   id: string
   timestamp: string | null
   userText: string
-  assistantBlocks: ParsedBlock[]
-  toolCalls: ParsedToolCall[]
+  assistantBlocks: ParsedAssistantBlock[]
   sourceMeta: SessionSourceMeta
 }
 
@@ -63,6 +62,7 @@ interface ParsedBlock {
 
 interface ParsedToolCall {
   id: string
+  kind?: 'tool-call'
   name: string
   input: unknown
   result: string | null
@@ -72,6 +72,7 @@ interface ParsedToolCall {
   line: number
 }
 
+type ParsedAssistantBlock = ParsedBlock | (ParsedToolCall & { kind: 'tool-call' })
 type NormalizedBlock = { block: ParsedBlock; toolCall?: ParsedToolCall }
 
 export async function discoverClaudeSessions(
@@ -143,37 +144,41 @@ export async function loadClaudeSession(
       role: 'turn' as const,
       timestamp: turn.timestamp,
       userText: turn.userText,
-      assistantBlocks: turn.assistantBlocks.map((block, blockIndex) => ({
-        id: `${turn.id}:block:${blockIndex}`,
-        kind: block.kind,
-        text: block.text,
-        timestamp: block.timestamp ?? undefined,
-        sourceMeta: {
-          provider: CLAUDE_SOURCE,
-          filePath: safePath,
-          lineStart: block.line,
-          lineEnd: block.line,
-          eventIds: [String(blockIndex)],
-          rawTypes: [block.kind as SessionTextBlockKind],
-        },
-      })),
-      toolCalls: turn.toolCalls.map((toolCall) => ({
-        id: toolCall.id,
-        name: toolCall.name,
-        input: toolCall.input,
-        result: toolCall.result,
-        isError: toolCall.isError,
-        timestamp: toolCall.timestamp,
-        resultTimestamp: toolCall.resultTimestamp,
-        sourceMeta: {
-          provider: CLAUDE_SOURCE,
-          filePath: safePath,
-          lineStart: toolCall.line,
-          lineEnd: toolCall.line,
-          eventIds: [toolCall.id],
-          rawTypes: ['tool_use'],
-        },
-      })),
+      assistantBlocks: turn.assistantBlocks.map((block, blockIndex) =>
+        block.kind === 'tool-call'
+          ? {
+              id: block.id,
+              kind: 'tool-call' as const,
+              name: block.name,
+              input: block.input,
+              result: block.result,
+              isError: block.isError,
+              timestamp: block.timestamp,
+              resultTimestamp: block.resultTimestamp,
+              sourceMeta: {
+                provider: CLAUDE_SOURCE,
+                filePath: safePath,
+                lineStart: block.line,
+                lineEnd: block.line,
+                eventIds: [block.id],
+                rawTypes: ['tool_use'],
+              },
+            }
+          : {
+              id: `${turn.id}:block:${blockIndex}`,
+              kind: block.kind,
+              text: block.text,
+              timestamp: block.timestamp ?? undefined,
+              sourceMeta: {
+                provider: CLAUDE_SOURCE,
+                filePath: safePath,
+                lineStart: block.line,
+                lineEnd: block.line,
+                eventIds: [String(blockIndex)],
+                rawTypes: [block.kind as SessionTextBlockKind],
+              },
+            },
+      ),
       sourceMeta: turn.sourceMeta,
     })),
   }
@@ -295,17 +300,7 @@ function parseTurns(
       index = attachToolResults(assistantParsed, entries, nextIndex)
 
       const cleanedText = extractSystemTags(userText)
-      const blocks = assistantParsed.flatMap((item) =>
-        item.toolCall ? [] : [item.block],
-      )
-      const toolCalls = assistantParsed.flatMap((item) => (item.toolCall ? [item.toolCall] : []))
-
-      const normalizedBlocks = blocks
-      const normalizedToolCalls = toolCalls.map((toolCall, toolIndex) => ({
-        ...toolCall,
-        id: `${turnId}:tool:${toolIndex}`,
-        line: toolCall.line || turnEndLine,
-      }))
+      const normalizedBlocks = toParsedAssistantBlocks(assistantParsed, turnId, turnEndLine)
 
       const sourceMeta: SessionSourceMeta = {
         provider: CLAUDE_SOURCE,
@@ -315,20 +310,18 @@ function parseTurns(
           Math.max(
             turnEndLine,
             ...normalizedBlocks.map((block) => block.line),
-            ...normalizedToolCalls.map((tool) => tool.line),
           ) || turnEndLine,
         eventIds: [`${turnId}`],
         rawTypes: ['user', 'assistant'],
       }
 
-      if (normalizedBlocks.length > 0 || normalizedToolCalls.length > 0 || cleanedText) {
+      if (normalizedBlocks.length > 0 || cleanedText) {
         turnCounter += 1
         turns.push({
           id: `claude-turn-${turnCounter}`,
           timestamp: turnTimestamp,
           userText: cleanedText,
           assistantBlocks: normalizedBlocks,
-          toolCalls: normalizedToolCalls,
           sourceMeta,
         })
       }
@@ -340,31 +333,21 @@ function parseTurns(
       const turnId = `claude-turn-${turnCounter + 1}`
       const [assistantParsed, nextIndex] = collectAssistantBlocks(entries, index)
       index = attachToolResults(assistantParsed, entries, nextIndex)
-      const blocks = assistantParsed.flatMap((item) =>
-        item.toolCall ? [] : [item.block],
-      )
-      const toolCalls = assistantParsed.flatMap((item) => (item.toolCall ? [item.toolCall] : []))
-
-      const normalizedToolCalls = toolCalls.map((toolCall, toolIndex) => ({
-        ...toolCall,
-        id: `${turnId}:tool:${toolIndex}`,
-        line: toolCall.line || entry.line,
-      }))
+      const normalizedBlocks = toParsedAssistantBlocks(assistantParsed, turnId, entry.line)
 
       const sourceMeta: SessionSourceMeta = {
         provider: CLAUDE_SOURCE,
         filePath,
         lineStart: entry.line,
-        lineEnd: Math.max(entry.line, ...blocks.map((block) => block.line), ...normalizedToolCalls.map((tool) => tool.line)),
+        lineEnd: Math.max(entry.line, ...normalizedBlocks.map((block) => block.line)),
         eventIds: [`${turnId}`],
         rawTypes: ['assistant'],
       }
 
-      if (blocks.length > 0 || normalizedToolCalls.length > 0) {
+      if (normalizedBlocks.length > 0) {
         if (turns.length > 0) {
           const lastTurn = turns[turns.length - 1]
-          lastTurn.assistantBlocks.push(...blocks)
-          lastTurn.toolCalls.push(...normalizedToolCalls)
+          lastTurn.assistantBlocks.push(...normalizedBlocks)
           lastTurn.sourceMeta.lineEnd = Math.max(lastTurn.sourceMeta.lineEnd, sourceMeta.lineEnd)
         } else {
           turnCounter += 1
@@ -372,8 +355,7 @@ function parseTurns(
             id: `claude-turn-${turnCounter}`,
             timestamp: normalizeTimestamp(entry.value.timestamp),
             userText: '',
-            assistantBlocks: blocks,
-            toolCalls: normalizedToolCalls,
+            assistantBlocks: normalizedBlocks,
             sourceMeta,
           })
         }
@@ -386,6 +368,30 @@ function parseTurns(
   }
 
   return turns
+}
+
+function toParsedAssistantBlocks(
+  assistantParsed: NormalizedBlock[],
+  turnId: string,
+  fallbackLine: number,
+): ParsedAssistantBlock[] {
+  let toolIndex = 0
+
+  return assistantParsed.map((item) => {
+    if (!item.toolCall) {
+      return item.block
+    }
+
+    const currentToolIndex = toolIndex
+    toolIndex += 1
+
+    return {
+      ...item.toolCall,
+      kind: 'tool-call' as const,
+      id: `${turnId}:tool:${currentToolIndex}`,
+      line: item.toolCall.line || fallbackLine,
+    }
+  })
 }
 
 function collectAssistantBlocks(

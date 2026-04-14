@@ -18,7 +18,7 @@ import type {
   SessionRef,
 } from './lib/api/contracts'
 import type { SessionWarning } from './lib/session'
-import { renderReplayTurnBodyHtml } from './lib/markdown'
+import { summarizeReplayTurn } from './lib/replay/blocks'
 import { Button } from './components/ui/button'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
@@ -62,6 +62,22 @@ function formatTimeLabel(timestamp?: string | null): string {
   return time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+function formatBlockEditorText(
+  block: MaterializedReplaySession['turns'][number]['blocks'][number],
+): string {
+  if (block.type !== 'tool') {
+    return block.text
+  }
+
+  return [
+    block.name,
+    block.input ? `Input\n${block.input}` : '',
+    block.output ? `Output\n${block.output}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 function makeReplaySession(
   session: MaterializedReplaySession,
   draft: { bookmarks: Record<string, { label: string }> } | undefined,
@@ -70,11 +86,12 @@ function makeReplaySession(
     const isHidden = turn.included === false
 
     return {
+      blocks: turn.blocks,
       id: turn.id,
       role: roleForPreview(turn.role),
       isBookmarked: Boolean(draft?.bookmarks[turn.id]),
       isHidden,
-      bodyHtml: renderReplayTurnBodyHtml(turn),
+      summary: summarizeReplayTurn(turn),
       timestamp: turn.timestamp ?? '',
       timeLabel: formatTimeLabel(turn.timestamp),
     }
@@ -544,15 +561,27 @@ function App() {
                                 {turn.blocks.length ? turn.blocks[0]?.title || roleForPreview(turn.role) : roleForPreview(turn.role)}
                                 {turn.timestamp ? ` · ${formatTimeLabel(turn.timestamp)}` : ''}
                               </p>
-                              {turn.blocks.map((block) => (
-                                <textarea
-                                  key={block.id}
-                                  className="input turn-strip__textarea"
-                                  rows={Math.min(8, Math.max(2, block.text.split('\n').length))}
-                                  value={loadedDraft?.blockTextEdits?.[turn.id]?.[block.id] ?? block.text}
-                                  onChange={(event) => handleBlockTextChange(turn.id, block.id, event.target.value)}
-                                />
-                              ))}
+                              {turn.blocks.map((block) => {
+                                const value =
+                                  block.type === 'tool'
+                                    ? formatBlockEditorText(block)
+                                    : loadedDraft?.blockTextEdits?.[turn.id]?.[block.id] ?? block.text
+
+                                return (
+                                  <textarea
+                                    key={block.id}
+                                    className="input turn-strip__textarea"
+                                    disabled={block.type === 'tool'}
+                                    rows={Math.min(8, Math.max(2, value.split('\n').length))}
+                                    value={value}
+                                    onChange={
+                                      block.type === 'tool'
+                                        ? undefined
+                                        : (event) => handleBlockTextChange(turn.id, block.id, event.target.value)
+                                    }
+                                  />
+                                )
+                              })}
                             </div>
                             <div className="turn-strip__actions">
                               <Button size="xs" onClick={() => toggleTurn(turn.id)}>

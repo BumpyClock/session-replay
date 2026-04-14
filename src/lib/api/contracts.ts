@@ -40,10 +40,7 @@ export interface SessionStats {
  */
 export type ReplayRole = 'assistant' | 'system' | 'tool' | 'user'
 
-/**
- * Renderable text/code/thinking unit inside a replay turn.
- */
-export interface ReplayBlock {
+export interface ReplayTextBlock {
   id: string
   type: 'code' | 'json' | 'markdown' | 'text' | 'thinking'
   text: string
@@ -51,16 +48,20 @@ export interface ReplayBlock {
   title?: string
 }
 
-/**
- * Readonly tool invocation data surfaced in the viewer.
- */
-export interface ReplayToolCall {
+export interface ReplayToolBlock {
   id: string
+  type: 'tool'
   name: string
   status?: 'completed' | 'failed' | 'running'
   input?: string
   output?: string
+  title?: string
 }
+
+/**
+ * Renderable unit inside a replay turn.
+ */
+export type ReplayBlock = ReplayTextBlock | ReplayToolBlock
 
 /**
  * Bookmark jump target inside a replay session.
@@ -100,7 +101,6 @@ export interface ReplayTurn {
   timestamp?: string
   included?: boolean
   blocks: ReplayBlock[]
-  toolCalls?: ReplayToolCall[]
 }
 
 /**

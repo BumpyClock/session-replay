@@ -214,13 +214,13 @@ function appendCopilotAssistantMessage(
       continue
     }
 
-    turn.toolCalls.push(
+    turn.assistantBlocks.push(
       createToolCall({
         filePath,
         id:
           typeof record.toolCallId === 'string'
             ? record.toolCallId
-            : `${turn.id}:tool:${turn.toolCalls.length}`,
+            : `${turn.id}:tool:${turn.assistantBlocks.length}`,
         input: normalized.input,
         name: normalized.name,
         provider: 'copilot',
@@ -291,7 +291,9 @@ function completeCopilotToolCall(turn: NormalizedTurn, entry: JsonLineEntry<Copi
     return
   }
 
-  const toolCall = [...turn.toolCalls].reverse().find((candidate) => candidate.id === data.toolCallId)
+  const toolCall = [...turn.assistantBlocks]
+    .reverse()
+    .find((candidate) => candidate.kind === 'tool-call' && candidate.id === data.toolCallId)
   if (!toolCall) {
     return
   }

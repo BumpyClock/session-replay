@@ -1,11 +1,15 @@
 import type {
   MaterializedReplaySession,
-  ReplayToolCall,
+  ReplayBlock,
   ReplayTurn,
   SessionRef as ApiSessionRef,
   SessionStats,
 } from "../api/contracts";
-import type { NormalizedSession, SessionToolCall, SessionRef } from "./contracts";
+import type {
+  NormalizedSession,
+  SessionAssistantBlock,
+  SessionRef,
+} from "./contracts";
 
 export function summarizeNormalizedSession(session: NormalizedSession): string | undefined {
   const firstUserTurn = session.turns.find((turn) => turn.userText.trim());
@@ -15,7 +19,8 @@ export function summarizeNormalizedSession(session: NormalizedSession): string |
 export function createSessionStats(session: NormalizedSession): SessionStats {
   const replayTurns = buildReplayTurns(session);
   const toolCallCount = session.turns.reduce(
-    (count, turn) => count + turn.toolCalls.length,
+    (count, turn) =>
+      count + turn.assistantBlocks.filter((block) => block.kind === "tool-call").length,
     0,
   );
 
@@ -83,13 +88,12 @@ export function sessionMatchesQuery(
     session.ref.path,
     summarizeNormalizedSession(session),
     ...session.turns.map((turn) => turn.userText),
-    ...session.turns.flatMap((turn) => turn.assistantBlocks.map((block) => block.text)),
     ...session.turns.flatMap((turn) =>
-      turn.toolCalls.flatMap((toolCall) => [
-        toolCall.name,
-        stringifyToolFragment(toolCall.input),
-        toolCall.result ?? "",
-      ]),
+      turn.assistantBlocks.flatMap((block) =>
+        block.kind === "tool-call"
+          ? [block.name, stringifyToolFragment(block.input), block.result ?? ""]
+          : [block.text],
+      ),
     ),
   ]
     .filter(Boolean)
@@ -120,26 +124,17 @@ function buildReplayTurns(session: NormalizedSession): ReplayTurn[] {
       });
     }
 
-    if (turn.assistantBlocks.length > 0 || turn.toolCalls.length > 0) {
+    if (turn.assistantBlocks.length > 0) {
       replayTurns.push({
         id: `${turn.id}:assistant`,
         index: replayTurns.length,
         role: "assistant",
         timestamp:
           turn.assistantBlocks.find((block) => block.timestamp)?.timestamp ??
-          turn.toolCalls.find((toolCall) => toolCall.timestamp)?.timestamp ??
           turn.timestamp ??
           undefined,
         included: true,
-        blocks: turn.assistantBlocks.map((block) => ({
-          id: block.id,
-          type: block.kind === "thinking" ? "thinking" : "markdown",
-          text: block.text,
-        })),
-        toolCalls:
-          turn.toolCalls.length > 0
-            ? turn.toolCalls.map(toReplayToolCall)
-            : undefined,
+        blocks: turn.assistantBlocks.map(toReplayBlock),
       });
     }
   }
@@ -147,17 +142,26 @@ function buildReplayTurns(session: NormalizedSession): ReplayTurn[] {
   return replayTurns;
 }
 
-function toReplayToolCall(toolCall: SessionToolCall): ReplayToolCall {
+function toReplayBlock(block: SessionAssistantBlock): ReplayBlock {
+  if (block.kind === "tool-call") {
+    return {
+      id: block.id,
+      type: "tool",
+      name: block.name,
+      status: block.result
+        ? block.isError
+          ? "failed"
+          : "completed"
+        : "running",
+      input: stringifyToolFragment(block.input),
+      output: block.result ?? undefined,
+    };
+  }
+
   return {
-    id: toolCall.id,
-    name: toolCall.name,
-    status: toolCall.result
-      ? toolCall.isError
-        ? "failed"
-        : "completed"
-      : "running",
-    input: stringifyToolFragment(toolCall.input),
-    output: toolCall.result ?? undefined,
+    id: block.id,
+    type: block.kind === "thinking" ? "thinking" : "markdown",
+    text: block.text,
   };
 }
 

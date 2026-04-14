@@ -48,13 +48,12 @@ export function createSearchDocFromSession(
   const transcriptText = normalizeSearchText(
     [
       ...session.turns.map((turn) => turn.userText),
-      ...session.turns.flatMap((turn) => turn.assistantBlocks.map((block) => block.text)),
       ...session.turns.flatMap((turn) =>
-        turn.toolCalls.flatMap((toolCall) => [
-          toolCall.name,
-          stringifyToolFragment(toolCall.input),
-          toolCall.result ?? '',
-        ]),
+        turn.assistantBlocks.flatMap((block) =>
+          block.kind === 'tool-call'
+            ? [block.name, stringifyToolFragment(block.input), block.result ?? '']
+            : [block.text],
+        ),
       ),
     ]
       .flat()

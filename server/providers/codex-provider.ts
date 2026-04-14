@@ -346,10 +346,10 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if (itemType === 'command_execution') {
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath: context.file.path,
-          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
+          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.assistantBlocks.length}`,
           input: { command: typeof item.command === 'string' ? item.command : '' },
           isError: Number(item.exit_code ?? 0) !== 0,
           name: 'Bash',
@@ -365,10 +365,10 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if (itemType === 'function_call') {
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath: context.file.path,
-          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.toolCalls.length}`,
+          id: typeof item.id === 'string' ? item.id : `${turn.id}:tool:${turn.assistantBlocks.length}`,
           input: parseJsonString(item.arguments) ?? item.arguments,
           isError: item.status === 'failed',
           name: typeof item.name === 'string' ? item.name : 'function_call',
@@ -408,7 +408,7 @@ function inferCodexProjectName(file: Readonly<SessionFileRef>): string {
 }
 
 function hasTurnContent(turn: NormalizedTurn): boolean {
-  return Boolean(turn.userText || turn.assistantBlocks.length > 0 || turn.toolCalls.length > 0)
+  return Boolean(turn.userText || turn.assistantBlocks.length > 0)
 }
 
 function readCodexCwd(payload: Record<string, unknown> | undefined): string | null {
@@ -480,14 +480,14 @@ function appendLegacyCodexResponse(
   if (payloadType === 'function_call') {
     const tool = mapCodexFunctionCall(payload, filePath, entry, turn)
     if (tool) {
-      turn.toolCalls.push(tool)
+      turn.assistantBlocks.push(tool)
     }
     return
   }
 
   if (payloadType === 'function_call_output') {
     const callId = typeof payload?.call_id === 'string' ? payload.call_id : ''
-    attachToolResult(turn.toolCalls, callId, cleanCodexOutput(toolResultText(payload?.output)), {
+    attachToolResult(turn.assistantBlocks, callId, cleanCodexOutput(toolResultText(payload?.output)), {
       isError: false,
       resultTimestamp: entry.value?.timestamp ?? null,
     })
@@ -496,10 +496,13 @@ function appendLegacyCodexResponse(
 
   if (payloadType === 'custom_tool_call') {
     if (payload?.name !== 'apply_patch' || typeof payload?.input !== 'string') {
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath,
-          id: typeof payload?.call_id === 'string' ? payload.call_id : `${turn.id}:tool:${turn.toolCalls.length}`,
+          id:
+            typeof payload?.call_id === 'string'
+              ? payload.call_id
+              : `${turn.id}:tool:${turn.assistantBlocks.length}`,
           input: payload?.input ?? null,
           name: typeof payload?.name === 'string' ? payload.name : 'custom_tool_call',
           provider: 'codex',
@@ -511,10 +514,11 @@ function appendLegacyCodexResponse(
       return
     }
 
-    const callId = typeof payload.call_id === 'string' ? payload.call_id : `${turn.id}:patch:${turn.toolCalls.length}`
+    const callId =
+      typeof payload.call_id === 'string' ? payload.call_id : `${turn.id}:patch:${turn.assistantBlocks.length}`
     const specs = parseApplyPatch(payload.input)
     if (specs.length === 0) {
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath,
           id: callId,
@@ -530,7 +534,7 @@ function appendLegacyCodexResponse(
     }
 
     specs.forEach((spec, index) => {
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath,
           id: `${callId}:${index}`,
@@ -559,7 +563,7 @@ function appendLegacyCodexResponse(
         ? Number(((output as Record<string, unknown>).metadata as Record<string, unknown>).exit_code ?? 0)
         : 0
 
-    attachToolResult(turn.toolCalls, callId, cleanCodexOutput(resultText), {
+    attachToolResult(turn.assistantBlocks, callId, cleanCodexOutput(resultText), {
       isError: exitCode !== 0,
       resultTimestamp: entry.value?.timestamp ?? null,
     })
@@ -576,7 +580,8 @@ function mapCodexFunctionCall(
     return null
   }
 
-  const callId = typeof payload.call_id === 'string' ? payload.call_id : `${turn.id}:tool:${turn.toolCalls.length}`
+  const callId =
+    typeof payload.call_id === 'string' ? payload.call_id : `${turn.id}:tool:${turn.assistantBlocks.length}`
   const parsedInput = parseJsonString(payload.arguments)
 
   if (payload.name === 'exec_command') {

@@ -1,7 +1,7 @@
 export {
   escapeHtml,
   renderMarkdownHtml,
+  renderReplayBlockBodyHtml,
   renderReplayBlockHtml,
-  renderReplayToolCallHtml,
   renderReplayTurnBodyHtml,
 } from './render'

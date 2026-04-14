@@ -114,8 +114,8 @@ describe('claude-code catalog provider', () => {
       title: 'Show me git status',
       summary: 'Show me git status',
       stats: {
-        turnCount: 3,
-        userTurnCount: 2,
+        turnCount: 2,
+        userTurnCount: 1,
         assistantTurnCount: 1,
         toolCallCount: 1,
       },
@@ -136,27 +136,37 @@ describe('claude-code catalog provider', () => {
       title: 'Show me git status',
     })
     expect(loaded.warnings).toEqual([])
-    expect(loaded.turns).toHaveLength(2)
+    expect(loaded.turns).toHaveLength(1)
     expect(loaded.turns[0]?.userText).toBe('Show me git status')
-    expect(loaded.turns[0]?.assistantBlocks.map((block) => block.text)).toEqual([
+    expect(loaded.turns[0]?.assistantBlocks.map((block) => block.kind)).toEqual([
+      'thinking',
+      'text',
+      'tool-call',
+    ])
+    expect(
+      loaded.turns[0]?.assistantBlocks
+        .filter((block) => block.kind !== 'tool-call')
+        .map((block) => block.text),
+    ).toEqual([
       'Inspecting repository state',
       'Running status command',
     ])
-    expect(loaded.turns[0]?.toolCalls).toMatchObject([
-      {
-        id: 'tool-1',
-        name: 'bash',
-        input: { cmd: 'git status' },
-        result: 'clean',
-        isError: false,
-      },
-    ])
-    expect(loaded.turns[1]?.userText).toBe('clean')
+    expect(loaded.turns[0]?.assistantBlocks[2]).toMatchObject({
+      id: 'tool-1',
+      kind: 'tool-call',
+      name: 'bash',
+      input: { cmd: 'git status' },
+      result: 'clean',
+      isError: false,
+    })
 
     const legacyLoaded = await legacyProvider.load(validFile!)
 
     expect(readJsonLinesMock).toHaveBeenCalledTimes(3)
     expect(legacyLoaded.ref.id).toBe(loaded.ref.id)
-    expect(legacyLoaded.turns[0]?.toolCalls[0]?.result).toBe('clean')
+    expect(legacyLoaded.turns[0]?.assistantBlocks[2]).toMatchObject({
+      kind: 'tool-call',
+      result: 'clean',
+    })
   })
 })

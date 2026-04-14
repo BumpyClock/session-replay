@@ -23,7 +23,7 @@ export function materializeReplaySession(
     const blocks = turn.blocks.map((block) => {
       const editedText = turnBlockEdits?.[block.id]
 
-      if (editedText === undefined) {
+      if (editedText === undefined || block.type === 'tool') {
         return block
       }
 
@@ -37,7 +37,6 @@ export function materializeReplaySession(
       ...turn,
       blocks,
       included: !excludedTurnIds.has(turn.id),
-      toolCalls: turn.toolCalls,
     }
   })
 

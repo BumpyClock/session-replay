@@ -54,6 +54,14 @@ function createFixtureSession(): MaterializedReplaySession {
             text: 'Fixed export mapping.',
             type: 'markdown',
           },
+          {
+            id: 'turn-3-tool',
+            type: 'tool',
+            name: 'Read',
+            status: 'completed',
+            input: '{\n  "file_path": "src/App.tsx"\n}',
+            output: 'const html = render()',
+          },
         ],
         id: 'turn-3',
         index: 2,
@@ -78,7 +86,7 @@ describe('renderReplayDocument', () => {
     expect(html).not.toContain('Thinking step')
     expect(html).toContain('<button class="bookmark" data-turn-index="1" type="button">Answer</button>')
     expect(html).toContain('value="1"')
-    expect(html).toContain('<article class="turn-panel is-active" data-turn-index="1" >')
+    expect(html).toContain('<article class="turn-panel turn-panel--tool is-active" data-turn-index="1" >')
   })
 
   it('applies revealThinking and keepTimestamps to rendered output', () => {
@@ -92,6 +100,11 @@ describe('renderReplayDocument', () => {
     expect(hiddenThinkingHtml).not.toContain('Sensitive chain of thought')
     expect(hiddenThinkingHtml).not.toContain('2026-04-13T08:00:01.000Z')
     expect(hiddenThinkingHtml).not.toContain('<time>')
+    expect(hiddenThinkingHtml).toContain('Tool: Read')
+    expect(hiddenThinkingHtml).toContain('data-action="expand-all"')
+    expect(hiddenThinkingHtml).toContain('data-action="collapse-all"')
+    expect(hiddenThinkingHtml).toContain('completed · const html = render()')
+    expect(hiddenThinkingHtml).toContain('turn-panel turn-panel--tool')
 
     const revealedThinkingHtml = renderReplayDocument(createFixtureSession(), {
       includeThinking: true,
@@ -102,6 +115,17 @@ describe('renderReplayDocument', () => {
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
     expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
     expect(revealedThinkingHtml).toContain('<time>2026-04-13T08:00:01.000Z</time>')
+    expect(revealedThinkingHtml).toContain('<details class="turn-block turn-block--tool">')
+  })
+
+  it('filters tool blocks when export disables tool call rendering', () => {
+    const html = renderReplayDocument(createFixtureSession(), {
+      includeThinking: true,
+      includeToolCalls: false,
+    })
+
+    expect(html).not.toContain('Tool: Read')
+    expect(html).not.toContain('const html = render()')
   })
 
   it('renders markdown blocks and escapes raw html in export output', () => {

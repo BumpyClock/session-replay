@@ -63,7 +63,7 @@ export async function loadClaudeCodeSession(
       if (toolResults.length > 0 && currentTurn) {
         appendTurnLine(currentTurn, entry.line)
         for (const toolResult of toolResults) {
-          attachToolResult(currentTurn.toolCalls, toolResult.toolUseId, toolResult.result, {
+          attachToolResult(currentTurn.assistantBlocks, toolResult.toolUseId, toolResult.result, {
             isError: toolResult.isError,
             resultTimestamp: entry.value?.timestamp ?? null,
           })
@@ -152,7 +152,29 @@ function extractUserText(entry: JsonLineEntry<ClaudeEntry>): string {
     return content.trim()
   }
 
-  return extractTextFragments(content).join('\n\n').trim()
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  return content
+    .flatMap((item) => {
+      if (typeof item === 'string') {
+        return [item]
+      }
+
+      if (!item || typeof item !== 'object') {
+        return []
+      }
+
+      const record = item as Record<string, unknown>
+      if (record.type === 'tool_result') {
+        return []
+      }
+
+      return extractTextFragments([record])
+    })
+    .join('\n\n')
+    .trim()
 }
 
 function extractToolResults(entry: JsonLineEntry<ClaudeEntry>): Array<{
@@ -241,7 +263,7 @@ function appendAssistantContent(
     if (itemType === 'tool_use') {
       const name = typeof record.name === 'string' ? record.name : 'Tool'
       const id = typeof record.id === 'string' ? record.id : `${turn.id}:tool:${index}`
-      turn.toolCalls.push(
+      turn.assistantBlocks.push(
         createToolCall({
           filePath,
           id,

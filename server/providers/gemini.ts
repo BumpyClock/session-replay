@@ -124,7 +124,7 @@ export async function loadGeminiSession(file: Readonly<SessionFileRef>): Promise
 
     for (const toolCall of message.toolCalls ?? []) {
       const normalized = normalizeGeminiTool(toolCall)
-      currentTurn.toolCalls.push(
+      currentTurn.assistantBlocks.push(
         createToolCall({
           filePath: file.path,
           id: normalized.id,

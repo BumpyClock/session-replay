@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it'
-import type { ReplayBlock, ReplayToolCall, ReplayTurn } from '../api/contracts'
+import type { ReplayBlock, ReplayTurn } from '../api/contracts'
+import { isReplayToolBlock } from '../replay/blocks'
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -39,53 +40,54 @@ export function renderMarkdownHtml(markdownSource: string): string {
 }
 
 export function renderReplayBlockHtml(block: ReplayBlock): string {
-  const title = block.title ? `<div class="replay-block-title">${escapeHtml(block.title)}</div>` : ''
+  return `<section class="replay-body-block replay-body-block--${escapeHtml(block.type)}">
+    ${renderReplayBlockTitleHtml(block)}
+    ${renderReplayBlockBodyHtml(block)}
+  </section>`
+}
+
+export function renderReplayBlockBodyHtml(block: ReplayBlock): string {
+  if (isReplayToolBlock(block)) {
+    const input = block.input
+      ? `<div class="replay-toolcall-section">
+          <div class="replay-toolcall-label">Input</div>
+          <pre><code>${escapeHtml(block.input)}</code></pre>
+        </div>`
+      : ''
+    const output = block.output
+      ? `<div class="replay-toolcall-section">
+          <div class="replay-toolcall-label">Output</div>
+          <pre><code>${escapeHtml(block.output)}</code></pre>
+        </div>`
+      : ''
+
+    return `<div class="replay-toolcall-grid">${input}${output}</div>`
+  }
 
   if (block.type === 'code' || block.type === 'json') {
     const languageClass = block.language ? ` class="language-${escapeHtml(block.language)}"` : ''
 
-    return `<section class="replay-body-block replay-body-block--${escapeHtml(block.type)}">
-      ${title}
-      <pre><code${languageClass}>${escapeHtml(block.text)}</code></pre>
-    </section>`
+    return `<pre><code${languageClass}>${escapeHtml(block.text)}</code></pre>`
   }
 
   if (block.type === 'markdown') {
     const content = renderMarkdownHtml(block.text)
 
-    return `<section class="replay-body-block replay-body-block--${escapeHtml(block.type)}">
-      ${title}
-      <div class="markdown-render">${content}</div>
-    </section>`
+    return `<div class="markdown-render">${content}</div>`
   }
 
-  return `<section class="replay-body-block replay-body-block--${escapeHtml(block.type)}">
-    ${title}
-    <div class="replay-text-render">${escapeHtml(block.text)}</div>
-  </section>`
+  return `<div class="replay-text-render">${escapeHtml(block.text)}</div>`
 }
 
-export function renderReplayToolCallHtml(toolCall: ReplayToolCall): string {
-  const status = toolCall.status ? ` · ${escapeHtml(toolCall.status)}` : ''
-  const input = toolCall.input
-    ? `<div class="replay-toolcall-section">
-        <div class="replay-toolcall-label">Input</div>
-        <pre><code>${escapeHtml(toolCall.input)}</code></pre>
-      </div>`
-    : ''
-  const output = toolCall.output
-    ? `<div class="replay-toolcall-section">
-        <div class="replay-toolcall-label">Output</div>
-        <pre><code>${escapeHtml(toolCall.output)}</code></pre>
-      </div>`
-    : ''
-
-  return `<section class="replay-body-block replay-body-block--tool">
-    <div class="replay-block-title">${escapeHtml(toolCall.name)}${status}</div>
-    <div class="replay-toolcall-grid">${input}${output}</div>
-  </section>`
+export function renderReplayTurnBodyHtml(turn: Pick<ReplayTurn, 'blocks'>): string {
+  return turn.blocks.map(renderReplayBlockHtml).join('')
 }
 
-export function renderReplayTurnBodyHtml(turn: Pick<ReplayTurn, 'blocks' | 'toolCalls'>): string {
-  return [...turn.blocks.map(renderReplayBlockHtml), ...(turn.toolCalls ?? []).map(renderReplayToolCallHtml)].join('')
+function renderReplayBlockTitleHtml(block: ReplayBlock): string {
+  if (isReplayToolBlock(block)) {
+    const status = block.status ? ` · ${escapeHtml(block.status)}` : ''
+    return `<div class="replay-block-title">${escapeHtml(block.name)}${status}</div>`
+  }
+
+  return block.title ? `<div class="replay-block-title">${escapeHtml(block.title)}</div>` : ''
 }

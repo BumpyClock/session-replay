@@ -1,9 +1,17 @@
 import type {
   MaterializedReplaySession,
+  ReplayBlock,
   ReplayRenderOptions,
   ReplayTurn,
 } from '../../src/lib/api/contracts'
-import { renderReplayTurnBodyHtml } from '../../src/lib/markdown/render'
+import { renderReplayBlockBodyHtml } from '../../src/lib/markdown/render'
+import {
+  getReplayBlockDefaultOpen,
+  getReplayBlockLabel,
+  getReplayBlockSummaryMeta,
+  getReplayTurnTone,
+  summarizeReplayTurn,
+} from '../../src/lib/replay/blocks'
 
 const DEFAULT_AUTOPLAY_DELAY = 1400
 const HIDDEN_THINKING_LABEL = 'Thinking hidden for this export.'
@@ -51,6 +59,10 @@ export function renderReplayDocument(
               <button class="control primary" data-action="toggle-play" type="button">Play</button>
               <button class="control" data-action="next" type="button">Next</button>
               <button class="control" data-action="last" type="button">Last</button>
+            </div>
+            <div class="control-row control-row--secondary">
+              <button class="control" data-action="expand-all" type="button">Expand all</button>
+              <button class="control" data-action="collapse-all" type="button">Collapse all</button>
             </div>
             <label class="timeline">
               <span>Turn <output id="turn-counter">${replay.turns.length === 0 ? 0 : initialTurnIndex + 1}</output> / ${replay.turns.length}</span>
@@ -106,6 +118,10 @@ export function sanitizeDownloadName(title: string): string {
   return collapsed || 'session-replay'
 }
 
+/**
+ * Shapes exported replay data after editor filtering so bookmarks, playback indices,
+ * and disclosure defaults stay aligned with the visible turn list.
+ */
 function createRenderableSession(
   session: MaterializedReplaySession,
   options: ReplayRenderOptions,
@@ -121,6 +137,10 @@ function createRenderableSession(
   const visibleTurnIndexMap = new Map<number, number>()
   const turns = includedTurns.flatMap((turn, originalVisibleIndex) => {
     const blocks = turn.blocks.flatMap((block) => {
+      if (block.type === 'tool') {
+        return includeToolCalls ? [block] : []
+      }
+
       if (block.type !== 'thinking') {
         return [block]
       }
@@ -140,9 +160,7 @@ function createRenderableSession(
         },
       ]
     })
-    const toolCalls = includeToolCalls ? turn.toolCalls ?? [] : []
-
-    if (blocks.length === 0 && toolCalls.length === 0) {
+    if (blocks.length === 0) {
       return []
     }
 
@@ -150,15 +168,14 @@ function createRenderableSession(
     visibleTurnIndexMap.set(originalVisibleIndex, nextIndex)
 
     return [
-      {
-        ...turn,
-        blocks,
-        index: nextIndex,
-        timestamp: keepTimestamps ? turn.timestamp : undefined,
-        toolCalls,
-      },
-    ]
-  })
+        {
+          ...turn,
+          blocks,
+          index: nextIndex,
+          timestamp: keepTimestamps ? turn.timestamp : undefined,
+        },
+      ]
+    })
   const bookmarks = (session.bookmarks ?? [])
     .flatMap((bookmark) => {
       const turnIndex = visibleTurnIndexMap.get(bookmark.turnIndex)
@@ -205,18 +222,20 @@ function renderTurnListItem(turn: ReplayTurn, active: boolean): string {
   const time = turn.timestamp
     ? `<span class="turn-time">${escapeHtml(turn.timestamp)}</span>`
     : ''
+  const tone = getReplayTurnTone(turn)
 
-  return `<button class="turn-item${active ? ' is-active' : ''}" data-turn-index="${turn.index}" type="button">
+  return `<button class="turn-item turn-item--${escapeHtml(tone)}${active ? ' is-active' : ''}" data-turn-index="${turn.index}" type="button">
     <span class="turn-role role-${escapeHtml(turn.role)}">${escapeHtml(turn.role)}</span>
-    <span class="turn-label">${escapeHtml(turn.label ?? summarizeTurn(turn))}</span>
+    <span class="turn-label">${escapeHtml(summarizeReplayTurn(turn))}</span>
     ${time}
   </button>`
 }
 
 function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): string {
   const time = turn.timestamp ? `<time>${escapeHtml(turn.timestamp)}</time>` : ''
+  const tone = getReplayTurnTone(turn)
 
-  return `<article class="turn-panel${active ? ' is-active' : ''}" data-turn-index="${turnIndex}" ${active ? '' : 'hidden'}>
+  return `<article class="turn-panel turn-panel--${escapeHtml(tone)}${active ? ' is-active' : ''}" data-turn-index="${turnIndex}" ${active ? '' : 'hidden'}>
     <header class="turn-header">
       <div>
         <span class="turn-role role-${escapeHtml(turn.role)}">${escapeHtml(turn.role)}</span>
@@ -224,18 +243,24 @@ function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): 
       </div>
       ${time}
     </header>
-    <div class="turn-body">${renderReplayTurnBodyHtml(turn)}</div>
+    <details class="turn-disclosure" open>
+      <summary class="turn-disclosure-summary">${escapeHtml(summarizeReplayTurn(turn))}</summary>
+      <div class="turn-body">${turn.blocks.map(renderReplayTurnBlock).join('')}</div>
+    </details>
   </article>`
 }
 
-function summarizeTurn(turn: ReplayTurn): string {
-  const firstBlock = turn.blocks.find((block) => block.text.trim().length > 0)
+function renderReplayTurnBlock(block: ReplayBlock): string {
+  const open = getReplayBlockDefaultOpen(block)
+  const summaryMeta = getReplayBlockSummaryMeta(block)
 
-  if (!firstBlock) {
-    return `Turn ${turn.index + 1}`
-  }
-
-  return firstBlock.text.trim().slice(0, 56)
+  return `<details class="turn-block turn-block--${escapeHtml(block.type)}"${open ? ' open' : ''}>
+    <summary class="turn-block-summary">
+      <span class="turn-block-summary-label">${escapeHtml(getReplayBlockLabel(block))}</span>
+      ${summaryMeta ? `<span class="turn-block-summary-meta">${escapeHtml(summaryMeta)}</span>` : ''}
+    </summary>
+    <div class="turn-block-content">${renderReplayBlockBodyHtml(block)}</div>
+  </details>`
 }
 
 function clampTurnIndex(value: number, turnCount: number): number {
@@ -329,6 +354,7 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .panel { padding: 16px; }
 .controls { position: sticky; top: 24px; z-index: 1; }
 .control-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.control-row--secondary { margin-top: 8px; }
 .control, .bookmark, .turn-item { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-solid); color: var(--text); transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease; }
 .control:hover, .bookmark:hover, .turn-item:hover { background: var(--surface-hover); transform: translateY(-1px); }
 .control:focus-visible, .bookmark:focus-visible, .turn-item:focus-visible, input:focus-visible { outline: 2px solid rgba(35, 131, 226, 0.45); outline-offset: 2px; }
@@ -340,6 +366,8 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .bookmark { min-height: 44px; padding: 0 14px; text-align: left; }
 .turn-item { width: 100%; display: grid; gap: 6px; padding: 12px 14px; text-align: left; }
 .turn-item.is-active, .turn-panel.is-active { border-color: rgba(35, 131, 226, 0.26); background: rgba(255,255,255,0.97); }
+.turn-item--thinking, .turn-panel--thinking { border-left: 3px solid rgba(224, 115, 40, 0.55); }
+.turn-item--tool, .turn-panel--tool { border-left: 3px solid rgba(35, 131, 226, 0.55); }
 .turn-role { display: inline-flex; width: fit-content; align-items: center; justify-content: center; min-height: 24px; padding: 0 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; text-transform: capitalize; }
 .role-user { background: rgba(35, 131, 226, 0.11); color: var(--primary); }
 .role-assistant { background: rgba(37, 162, 68, 0.11); color: var(--success); }
@@ -350,7 +378,23 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-panel { display: grid; gap: 18px; }
 .turn-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
 .turn-header h2 { margin: 10px 0 0; font-size: 1.15rem; }
-.turn-body { display: grid; gap: 12px; }
+.turn-disclosure, .turn-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); overflow: hidden; }
+.turn-disclosure-summary, .turn-block-summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; font-weight: 600; }
+.turn-disclosure-summary::-webkit-details-marker, .turn-block-summary::-webkit-details-marker { display: none; }
+.turn-disclosure-summary::before, .turn-block-summary::before { content: '▸'; color: var(--text-muted); transition: transform 120ms ease; }
+.turn-disclosure[open] > .turn-disclosure-summary::before, .turn-block[open] > .turn-block-summary::before { transform: rotate(90deg); }
+.turn-disclosure-summary { background: rgba(15, 23, 42, 0.04); }
+.turn-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.turn-block-summary { font-size: 0.92rem; }
+.turn-block-summary-label { flex: 0 1 auto; }
+.turn-block-summary-meta { color: var(--text-muted); font-size: 0.82rem; font-weight: 500; margin-left: auto; text-align: right; }
+.turn-block-content { display: grid; gap: 10px; padding: 0 16px 16px; }
+.turn-block--thinking { border-style: dashed; }
+.turn-block--thinking .turn-block-summary,
+.turn-block--tool .turn-block-summary { font-size: 0.82rem; }
+.turn-block--thinking .turn-block-content,
+.turn-block--tool .turn-block-content { font-size: 0.92rem; color: var(--text-muted); }
+.turn-block--tool .turn-block-summary { color: var(--danger); }
 .replay-body-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); padding: 16px; }
 .replay-body-block--thinking { border-style: dashed; }
 .replay-block-title { margin-bottom: 10px; color: var(--text-muted); font-size: 0.83rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -395,6 +439,8 @@ function buildRuntime(autoplayDelayMs: number): string {
   const prev = document.querySelector('[data-action="prev"]');
   const next = document.querySelector('[data-action="next"]');
   const last = document.querySelector('[data-action="last"]');
+  const expandAll = document.querySelector('[data-action="expand-all"]');
+  const collapseAll = document.querySelector('[data-action="collapse-all"]');
   let index = panels.findIndex((panel) => !panel.hasAttribute('hidden'));
   let timer = null;
 
@@ -443,6 +489,12 @@ function buildRuntime(autoplayDelayMs: number): string {
     }, ${autoplayDelayMs});
   }
 
+  function setDisclosureState(open) {
+    document.querySelectorAll('.turn-disclosure, .turn-block').forEach((node) => {
+      node.open = open;
+    });
+  }
+
   jumpButtons.forEach((button) => {
     button.addEventListener('click', function () {
       const turnIndex = Number(button.dataset.turnIndex);
@@ -472,6 +524,8 @@ function buildRuntime(autoplayDelayMs: number): string {
   if (prev) prev.addEventListener('click', function () { stopPlayback(); setIndex(index - 1); });
   if (next) next.addEventListener('click', function () { stopPlayback(); setIndex(index + 1); });
   if (last) last.addEventListener('click', function () { stopPlayback(); setIndex(panels.length - 1); });
+  if (expandAll) expandAll.addEventListener('click', function () { setDisclosureState(true); });
+  if (collapseAll) collapseAll.addEventListener('click', function () { setDisclosureState(false); });
 
   sync();
 }())`

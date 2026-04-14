@@ -3,6 +3,7 @@ import type {
   IndexedSessionEntry,
   NormalizedTurn,
   NormalizedSession,
+  SessionAssistantBlock,
   SessionFileRef,
   SessionFileFingerprint,
   SessionRef,
@@ -66,7 +67,6 @@ export function createTurn(input: CreateTurnInput): NormalizedTurn {
     timestamp: input.timestamp ?? null,
     userText: input.userText.trim(),
     assistantBlocks: [],
-    toolCalls: [],
     sourceMeta: createSourceMeta({
       filePath: input.filePath,
       provider: input.provider,
@@ -137,6 +137,7 @@ export function createToolCall(input: {
 }): SessionToolCall {
   return {
     id: input.id,
+    kind: 'tool-call',
     name: input.name,
     input: input.input ?? null,
     result: input.result ? normalizeWhitespace(input.result) : null,
@@ -172,8 +173,7 @@ export function finalizeTurns(turns: NormalizedTurn[]): NormalizedTurn[] {
     .filter((turn) => {
       return Boolean(
         turn.userText ||
-          turn.assistantBlocks.length > 0 ||
-          turn.toolCalls.length > 0,
+          turn.assistantBlocks.length > 0,
       )
     })
     .map((turn, index) => ({
@@ -336,7 +336,7 @@ export function toolResultText(value: unknown): string | null {
 }
 
 export function attachToolResult(
-  toolCalls: SessionToolCall[],
+  assistantBlocks: SessionAssistantBlock[],
   toolId: string,
   result: string | null,
   options: {
@@ -346,7 +346,12 @@ export function attachToolResult(
 ): boolean {
   let matched = false
 
-  for (const toolCall of [...toolCalls].reverse()) {
+  for (const block of [...assistantBlocks].reverse()) {
+    if (block.kind !== 'tool-call') {
+      continue
+    }
+
+    const toolCall = block
     if (toolCall.id !== toolId && !toolCall.id.startsWith(`${toolId}:`)) {
       continue
     }

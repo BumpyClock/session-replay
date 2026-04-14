@@ -25,7 +25,7 @@ export function buildSessionSummary(
 ): string | undefined {
   const firstAssistantText = turns
     .flatMap((turn) => turn.assistantBlocks)
-    .map((block) => block.text.trim())
+    .flatMap((block) => (block.kind === "tool-call" ? [] : [block.text.trim()]))
     .find((text) => text.length > 0);
 
   if (!firstAssistantText) {
@@ -39,10 +39,11 @@ export function buildSessionStats(
   turns: readonly NormalizedTurn[],
 ): SessionStats {
   const assistantTurnCount = turns.filter(
-    (turn) => turn.assistantBlocks.length > 0 || turn.toolCalls.length > 0,
+    (turn) => turn.assistantBlocks.length > 0,
   ).length;
   const toolCallCount = turns.reduce(
-    (count, turn) => count + turn.toolCalls.length,
+    (count, turn) =>
+      count + turn.assistantBlocks.filter((block) => block.kind === "tool-call").length,
     0,
   );
 

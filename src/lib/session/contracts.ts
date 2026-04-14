@@ -9,6 +9,12 @@ export type SessionSource =
 
 export type SessionTextBlockKind = "text" | "thinking";
 
+interface SessionAssistantBlockBase {
+  id: string;
+  timestamp: string | null;
+  sourceMeta: SessionSourceMeta;
+}
+
 /**
  * Raw transcript origin for normalized entities.
  * Used by editor/export layers to trace data back to immutable source files.
@@ -34,31 +40,28 @@ export interface SessionWarning {
 }
 
 /**
- * Assistant-authored text block after normalization.
- * Tool calls stay separate so editor/export can render them independently.
+ * Assistant-authored block after normalization.
+ * Text, thinking, and tool calls stay in source order for replay rendering.
  */
-export interface SessionTextBlock {
-  id: string;
+export interface SessionTextBlock extends SessionAssistantBlockBase {
   kind: SessionTextBlockKind;
   text: string;
-  timestamp: string | null;
-  sourceMeta: SessionSourceMeta;
 }
 
 /**
  * Tool invocation emitted by an agent transcript.
- * Input/result stay readonly snapshots from source logs.
+ * Stored alongside text blocks so replay rendering preserves interleaving.
  */
-export interface SessionToolCall {
-  id: string;
+export interface SessionToolCall extends SessionAssistantBlockBase {
+  kind: "tool-call";
   name: string;
   input: unknown;
   result: string | null;
   isError: boolean;
-  timestamp: string | null;
   resultTimestamp: string | null;
-  sourceMeta: SessionSourceMeta;
 }
+
+export type SessionAssistantBlock = SessionTextBlock | SessionToolCall;
 
 /**
  * Lightweight catalog entry returned by discovery.
@@ -87,8 +90,7 @@ export interface NormalizedTurn {
   role: "turn";
   timestamp: string | null;
   userText: string;
-  assistantBlocks: SessionTextBlock[];
-  toolCalls: SessionToolCall[];
+  assistantBlocks: SessionAssistantBlock[];
   sourceMeta: SessionSourceMeta;
 }
 

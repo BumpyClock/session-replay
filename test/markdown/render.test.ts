@@ -40,6 +40,22 @@ describe('renderReplayTurnBodyHtml', () => {
     expect(html).toContain('&lt;div class=&quot;evil&quot;&gt;owned&lt;/div&gt;')
   })
 
+  it('renders tool blocks with input and output sections', () => {
+    const html = renderReplayBlockHtml({
+      id: 'tool-1',
+      type: 'tool',
+      name: 'Read',
+      status: 'completed',
+      input: '{"file_path":"src/App.tsx"}',
+      output: 'console.log("hi")',
+    })
+
+    expect(html).toContain('Read · completed')
+    expect(html).toContain('Input')
+    expect(html).toContain('Output')
+    expect(html).toContain('src/App.tsx')
+  })
+
   it('keeps plain text blocks plain instead of markdown-rendering them', () => {
     const block: ReplayBlock = {
       id: 'block-plain',

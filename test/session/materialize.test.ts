@@ -40,25 +40,24 @@ function createFixtureSession(): NormalizedSession {
             },
           },
           {
-            id: 'turn-1-answer',
-            kind: 'text',
-            text: 'Found typo in greeting.',
-            timestamp: '2026-04-12T10:00:02Z',
-            sourceMeta: {
-              provider: 'codex',
-              filePath: '/tmp/session-1.jsonl',
-            },
-          },
-        ],
-        toolCalls: [
-          {
             id: 'tool-1',
+            kind: 'tool-call',
             name: 'Read',
             input: { file_path: '/tmp/demo-project/src/app.ts' },
             result: 'hello wrld',
             isError: false,
             timestamp: '2026-04-12T10:00:01Z',
             resultTimestamp: '2026-04-12T10:00:01Z',
+            sourceMeta: {
+              provider: 'codex',
+              filePath: '/tmp/session-1.jsonl',
+            },
+          },
+          {
+            id: 'turn-1-answer',
+            kind: 'text',
+            text: 'Found typo in greeting.',
+            timestamp: '2026-04-12T10:00:02Z',
             sourceMeta: {
               provider: 'codex',
               filePath: '/tmp/session-1.jsonl',
@@ -83,9 +82,16 @@ describe('session materialization', () => {
     expect(replay.turns).toHaveLength(2)
     expect(replay.turns[0]?.role).toBe('user')
     expect(replay.turns[1]?.role).toBe('assistant')
-    expect(replay.turns[1]?.blocks[0]?.type).toBe('thinking')
-    expect(replay.turns[1]?.blocks[1]?.type).toBe('markdown')
-    expect(replay.turns[1]?.toolCalls?.[0]?.input).toContain('file_path')
+    expect(replay.turns[1]?.blocks.map((block) => block.type)).toEqual([
+      'thinking',
+      'tool',
+      'markdown',
+    ])
+    expect(replay.turns[1]?.blocks[1]).toMatchObject({
+      input: expect.stringContaining('file_path'),
+      name: 'Read',
+      type: 'tool',
+    })
   })
 
   it('computes list metadata and content search from normalized sessions', () => {
