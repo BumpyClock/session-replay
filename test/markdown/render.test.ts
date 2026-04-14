@@ -46,13 +46,13 @@ describe('renderReplayTurnBodyHtml', () => {
       type: 'tool',
       name: 'Read',
       status: 'completed',
-      input: '{"file_path":"src/App.tsx"}',
+      input: { file_path: 'src/App.tsx' },
       output: 'console.log("hi")',
     })
 
     expect(html).toContain('Read · completed')
     expect(html).toContain('Input')
-    expect(html).toContain('Output')
+    expect(html).toContain('Result')
     expect(html).toContain('src/App.tsx')
   })
 

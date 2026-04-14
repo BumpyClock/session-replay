@@ -27,7 +27,7 @@ const session: ReplaySession = {
           id: 'tool-1',
           type: 'tool',
           name: 'Read',
-          input: '{\n  "file_path": "src/App.tsx"\n}',
+          input: { file_path: 'src/App.tsx' },
           output: 'file contents',
           status: 'completed',
         },
@@ -51,13 +51,12 @@ describe('ReplayPanel', () => {
     expect(screen.getByText('1 text, 1 thinking, 1 tool call')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Expand all' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Collapse all' })).toBeInTheDocument()
-    expect(screen.getByText('completed · file contents')).toBeInTheDocument()
+    expect(screen.getByText('completed · src/App.tsx')).toBeInTheDocument()
 
     const details = container.querySelectorAll('details')
     expect(details[0]).toHaveAttribute('open')
-    expect(details[1]).toHaveAttribute('open')
+    expect(details[1]).not.toHaveAttribute('open')
     expect(details[2]).not.toHaveAttribute('open')
-    expect(details[3]).not.toHaveAttribute('open')
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }))
     details.forEach((detail) => expect(detail).not.toHaveAttribute('open'))

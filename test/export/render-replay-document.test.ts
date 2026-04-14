@@ -59,7 +59,7 @@ function createFixtureSession(): MaterializedReplaySession {
             type: 'tool',
             name: 'Read',
             status: 'completed',
-            input: '{\n  "file_path": "src/App.tsx"\n}',
+            input: { file_path: 'src/App.tsx' },
             output: 'const html = render()',
           },
         ],
@@ -96,14 +96,15 @@ describe('renderReplayDocument', () => {
       revealThinking: false,
     })
 
-    expect(hiddenThinkingHtml).toContain('Thinking hidden for this export.')
-    expect(hiddenThinkingHtml).not.toContain('Sensitive chain of thought')
+    expect(hiddenThinkingHtml).toContain('Sensitive chain of thought')
+    expect(hiddenThinkingHtml).toContain('id="toggle-thinking" type="checkbox"')
+    expect(hiddenThinkingHtml).not.toContain('id="toggle-thinking" type="checkbox" checked')
     expect(hiddenThinkingHtml).not.toContain('2026-04-13T08:00:01.000Z')
     expect(hiddenThinkingHtml).not.toContain('<time>')
     expect(hiddenThinkingHtml).toContain('Tool: Read')
     expect(hiddenThinkingHtml).toContain('data-action="expand-all"')
     expect(hiddenThinkingHtml).toContain('data-action="collapse-all"')
-    expect(hiddenThinkingHtml).toContain('completed · const html = render()')
+    expect(hiddenThinkingHtml).toContain('completed · src/App.tsx')
     expect(hiddenThinkingHtml).toContain('turn-panel turn-panel--tool')
 
     const revealedThinkingHtml = renderReplayDocument(createFixtureSession(), {
@@ -113,9 +114,10 @@ describe('renderReplayDocument', () => {
     })
 
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
+    expect(revealedThinkingHtml).toContain('id="toggle-thinking" type="checkbox" checked')
     expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
     expect(revealedThinkingHtml).toContain('<time>2026-04-13T08:00:01.000Z</time>')
-    expect(revealedThinkingHtml).toContain('<details class="turn-block turn-block--tool">')
+    expect(revealedThinkingHtml).toContain('<details class="turn-block turn-block--tool" data-replay-kind="tool">')
   })
 
   it('filters tool blocks when export disables tool call rendering', () => {
@@ -149,5 +151,31 @@ describe('renderReplayDocument', () => {
     expect(html).toContain('<li>item one</li>')
     expect(html).not.toContain('<div class="evil">owned</div>')
     expect(html).toContain('&lt;div class=&quot;evil&quot;&gt;owned&lt;/div&gt;')
+  })
+
+  it('groups long consecutive tool runs behind a shared disclosure', () => {
+    const session = createFixtureSession()
+    session.turns[2] = {
+      ...session.turns[2],
+      blocks: Array.from({ length: 5 }, (_, index) => ({
+        id: `turn-3-tool-${index}`,
+        type: 'tool' as const,
+        name: index % 2 === 0 ? 'Read' : 'Bash',
+        status: index === 4 ? 'failed' : 'completed',
+        input: index % 2 === 0 ? { file_path: `src/file-${index}.ts` } : { command: `echo ${index}` },
+        output: `result-${index}`,
+        isError: index === 4,
+      })),
+    }
+
+    const html = renderReplayDocument(session, {
+      includeThinking: false,
+      includeToolCalls: true,
+    })
+
+    expect(html).toContain('class="turn-tool-group" data-replay-kind="tool"')
+    expect(html).toContain('>5 tool calls<')
+    expect(html).toContain('Read, Bash')
+    expect(html).toContain('1 failed')
   })
 })

@@ -4,6 +4,7 @@ import type {
   ReplayToolBlock,
   ReplayTurn,
 } from '../api/contracts'
+import { formatReplayToolPreview } from './tool-format'
 
 export type ReplayTurnTone = 'default' | 'thinking' | 'tool'
 
@@ -33,7 +34,7 @@ export function getReplayBlockDefaultOpen(block: ReplayBlock): boolean {
 
 export function getReplayBlockSummaryMeta(block: ReplayBlock): string | null {
   if (isReplayToolBlock(block)) {
-    const snippet = truncateInlineText(block.output ?? block.input ?? '', 72)
+    const snippet = formatReplayToolPreview(block, 72)
     const parts = [block.status, snippet].filter(Boolean)
     return parts.length > 0 ? parts.join(' · ') : null
   }

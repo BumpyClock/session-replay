@@ -1,5 +1,9 @@
 import type { SessionWarning } from '../session/contracts'
 
+/**
+ * Current immutable catalog snapshot.
+ * Counts reflect discovery/index progress for all scanned provider roots.
+ */
 export interface SessionCatalogStatus {
   discoveredCount: number
   indexedCount: number
@@ -40,6 +44,10 @@ export interface SessionStats {
  */
 export type ReplayRole = 'assistant' | 'system' | 'tool' | 'user'
 
+/**
+ * Renderable transcript text block.
+ * `title` and `language` are optional display hints for code/markdown renderers.
+ */
 export interface ReplayTextBlock {
   id: string
   type: 'code' | 'json' | 'markdown' | 'text' | 'thinking'
@@ -48,13 +56,21 @@ export interface ReplayTextBlock {
   title?: string
 }
 
+/**
+ * Structured tool invocation captured from transcript content.
+ * `input` stays structured so replay renderers can produce file-aware previews,
+ * diffs, and richer tool summaries without reparsing stringified payloads.
+ */
 export interface ReplayToolBlock {
   id: string
   type: 'tool'
   name: string
   status?: 'completed' | 'failed' | 'running'
-  input?: string
+  input?: unknown
   output?: string
+  isError?: boolean
+  timestamp?: string
+  resultTimestamp?: string
   title?: string
 }
 
@@ -109,10 +125,15 @@ export interface ReplayTurn {
 export interface ReplayRenderOptions {
   autoplayDelayMs?: number
   exportTitle?: string
+  /** Drop thinking blocks entirely when false. */
   includeThinking?: boolean
+  /** Drop tool blocks entirely when false. */
   includeToolCalls?: boolean
+  /** Prefer this visible replay turn after filtering. */
   initialTurnIndex?: number
+  /** Remove session/turn timestamps from rendered output when false. */
   keepTimestamps?: boolean
+  /** Keep thinking blocks in output but hide them by default when false. */
   revealThinking?: boolean
 }
 

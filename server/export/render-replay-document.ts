@@ -12,9 +12,14 @@ import {
   getReplayTurnTone,
   summarizeReplayTurn,
 } from '../../src/lib/replay/blocks'
+import {
+  createReplaySegments,
+  getReplayToolRunLabel,
+  getReplayToolRunSummaryMeta,
+  shouldGroupReplayToolRun,
+} from '../../src/lib/replay/segments'
 
 const DEFAULT_AUTOPLAY_DELAY = 1400
-const HIDDEN_THINKING_LABEL = 'Thinking hidden for this export.'
 
 /**
  * Renders a self-contained, viewer-only replay document.
@@ -26,6 +31,9 @@ export function renderReplayDocument(
   const { initialTurnIndex, session: replay } = createRenderableSession(session, options)
   const displayTitle = escapeHtml(options.exportTitle ?? replay.title)
   const bookmarks = replay.bookmarks ?? []
+  const hasThinking = replay.turns.some((turn) => turn.blocks.some((block) => block.type === 'thinking'))
+  const hasToolCalls = replay.turns.some((turn) => turn.blocks.some((block) => block.type === 'tool'))
+  const showThinkingByDefault = (options.revealThinking ?? false) && hasThinking
 
   return `<!doctype html>
 <html lang="en">
@@ -63,6 +71,16 @@ export function renderReplayDocument(
             <div class="control-row control-row--secondary">
               <button class="control" data-action="expand-all" type="button">Expand all</button>
               <button class="control" data-action="collapse-all" type="button">Collapse all</button>
+            </div>
+            <div class="control-row control-row--toggles">
+              <label class="control-toggle">
+                <input id="toggle-thinking" type="checkbox"${showThinkingByDefault ? ' checked' : ''}${hasThinking ? '' : ' disabled'} />
+                <span>Thinking</span>
+              </label>
+              <label class="control-toggle">
+                <input id="toggle-tools" type="checkbox"${hasToolCalls ? ' checked' : ''}${hasToolCalls ? '' : ' disabled'} />
+                <span>Tools</span>
+              </label>
             </div>
             <label class="timeline">
               <span>Turn <output id="turn-counter">${replay.turns.length === 0 ? 0 : initialTurnIndex + 1}</output> / ${replay.turns.length}</span>
@@ -132,7 +150,6 @@ function createRenderableSession(
   const includeThinking = options.includeThinking ?? true
   const includeToolCalls = options.includeToolCalls ?? true
   const keepTimestamps = options.keepTimestamps ?? true
-  const revealThinking = options.revealThinking ?? false
   const includedTurns = session.turns.filter((turn) => turn.included !== false)
   const visibleTurnIndexMap = new Map<number, number>()
   const turns = includedTurns.flatMap((turn, originalVisibleIndex) => {
@@ -149,16 +166,7 @@ function createRenderableSession(
         return []
       }
 
-      if (revealThinking) {
-        return [block]
-      }
-
-      return [
-        {
-          ...block,
-          text: HIDDEN_THINKING_LABEL,
-        },
-      ]
+      return [block]
     })
     if (blocks.length === 0) {
       return []
@@ -245,21 +253,61 @@ function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): 
     </header>
     <details class="turn-disclosure" open>
       <summary class="turn-disclosure-summary">${escapeHtml(summarizeReplayTurn(turn))}</summary>
-      <div class="turn-body">${turn.blocks.map(renderReplayTurnBlock).join('')}</div>
+      <div class="turn-body">${renderReplayTurnSegments(turn.blocks)}</div>
     </details>
   </article>`
+}
+
+function renderReplayTurnSegments(blocks: readonly ReplayBlock[]): string {
+  return createReplaySegments(blocks)
+    .map((segment) => {
+      if (segment.type === 'block') {
+        if (segment.block.type !== 'thinking') {
+          return renderReplayInlineBlock(segment.block)
+        }
+
+        return renderReplayTurnBlock(segment.block)
+      }
+
+      if (!shouldGroupReplayToolRun(segment)) {
+        return `<div class="turn-tool-run">${segment.blocks.map(renderReplayTurnBlock).join('')}</div>`
+      }
+
+      const summaryMeta = getReplayToolRunSummaryMeta(segment)
+      return `<details class="turn-tool-group" data-replay-kind="tool">
+        <summary class="turn-tool-group-summary">
+          <span class="turn-tool-group-label">${escapeHtml(getReplayToolRunLabel(segment))}</span>
+          ${summaryMeta ? `<span class="turn-tool-group-meta">${escapeHtml(summaryMeta)}</span>` : ''}
+        </summary>
+        <div class="turn-tool-group-content">${segment.blocks.map(renderReplayTurnBlock).join('')}</div>
+      </details>`
+    })
+    .join('')
+}
+
+function renderReplayInlineBlock(block: ReplayBlock): string {
+  const title = 'title' in block && block.title ? `<div class="turn-inline-block-title">${escapeHtml(block.title)}</div>` : ''
+
+  return `<div class="turn-inline-block turn-inline-block--${escapeHtml(block.type)}">
+    ${title}
+    <div class="turn-inline-block-content">${renderReplayBlockBodyHtml(block)}</div>
+  </div>`
 }
 
 function renderReplayTurnBlock(block: ReplayBlock): string {
   const open = getReplayBlockDefaultOpen(block)
   const summaryMeta = getReplayBlockSummaryMeta(block)
+  const replayKind =
+    block.type === 'thinking' ? ' data-replay-kind="thinking"' : block.type === 'tool' ? ' data-replay-kind="tool"' : ''
+  const contentClassName =
+    block.type === 'tool' ? 'turn-block-content turn-block-content--tool' : 'turn-block-content'
 
-  return `<details class="turn-block turn-block--${escapeHtml(block.type)}"${open ? ' open' : ''}>
+  return `<details class="turn-block turn-block--${escapeHtml(block.type)}"${open ? ' open' : ''}${replayKind}>
     <summary class="turn-block-summary">
       <span class="turn-block-summary-label">${escapeHtml(getReplayBlockLabel(block))}</span>
       ${summaryMeta ? `<span class="turn-block-summary-meta">${escapeHtml(summaryMeta)}</span>` : ''}
     </summary>
-    <div class="turn-block-content">${renderReplayBlockBodyHtml(block)}</div>
+    <div class="${contentClassName}">${renderReplayBlockBodyHtml(block)}</div>
   </details>`
 }
 
@@ -355,11 +403,16 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .controls { position: sticky; top: 24px; z-index: 1; }
 .control-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .control-row--secondary { margin-top: 8px; }
+.control-row--toggles { margin-top: 10px; }
 .control, .bookmark, .turn-item { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-solid); color: var(--text); transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease; }
 .control:hover, .bookmark:hover, .turn-item:hover { background: var(--surface-hover); transform: translateY(-1px); }
 .control:focus-visible, .bookmark:focus-visible, .turn-item:focus-visible, input:focus-visible { outline: 2px solid rgba(35, 131, 226, 0.45); outline-offset: 2px; }
 .control { min-height: 44px; padding: 0 14px; }
 .primary { background: var(--primary); color: white; border-color: transparent; }
+.control-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-solid); color: var(--text-muted); }
+.control-toggle input { margin: 0; }
+.control-toggle:has(input:checked) { color: var(--text); border-color: rgba(35, 131, 226, 0.26); background: rgba(255,255,255,0.97); }
+.control-toggle:has(input:disabled) { opacity: 0.55; }
 .timeline { margin-top: 14px; display: grid; gap: 10px; color: var(--text-muted); }
 .timeline input { width: 100%; }
 .bookmark-list, .turn-list { display: grid; gap: 8px; }
@@ -385,22 +438,37 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-disclosure[open] > .turn-disclosure-summary::before, .turn-block[open] > .turn-block-summary::before { transform: rotate(90deg); }
 .turn-disclosure-summary { background: rgba(15, 23, 42, 0.04); }
 .turn-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.turn-inline-block { display: grid; gap: 10px; }
+.turn-inline-block-title { color: var(--text-muted); font-size: 0.83rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.turn-inline-block-content { display: grid; gap: 10px; }
+.turn-tool-run { display: grid; gap: 12px; }
 .turn-block-summary { font-size: 0.92rem; }
 .turn-block-summary-label { flex: 0 1 auto; }
 .turn-block-summary-meta { color: var(--text-muted); font-size: 0.82rem; font-weight: 500; margin-left: auto; text-align: right; }
 .turn-block-content { display: grid; gap: 10px; padding: 0 16px 16px; }
+.turn-tool-group { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); overflow: hidden; }
+.turn-tool-group-summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; font-weight: 600; font-size: 0.88rem; color: var(--danger); }
+.turn-tool-group-summary::-webkit-details-marker { display: none; }
+.turn-tool-group-summary::before { content: '▸'; color: var(--text-muted); transition: transform 120ms ease; }
+.turn-tool-group[open] > .turn-tool-group-summary::before { transform: rotate(90deg); }
+.turn-tool-group-meta { color: var(--text-muted); font-size: 0.82rem; font-weight: 500; margin-left: auto; text-align: right; }
+.turn-tool-group-content { display: grid; gap: 12px; padding: 0 16px 16px; }
 .turn-block--thinking { border-style: dashed; }
 .turn-block--thinking .turn-block-summary,
 .turn-block--tool .turn-block-summary { font-size: 0.82rem; }
 .turn-block--thinking .turn-block-content,
 .turn-block--tool .turn-block-content { font-size: 0.92rem; color: var(--text-muted); }
 .turn-block--tool .turn-block-summary { color: var(--danger); }
+.turn-block-content--tool { padding-top: 2px; }
 .replay-body-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); padding: 16px; }
 .replay-body-block--thinking { border-style: dashed; }
 .replay-block-title { margin-bottom: 10px; color: var(--text-muted); font-size: 0.83rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .replay-toolcall-grid { display: grid; gap: 10px; }
 .replay-toolcall-section { display: grid; gap: 8px; }
+.replay-toolcall-section--error pre,
+.replay-tool-result--error pre { border-color: rgba(217, 45, 32, 0.3); background: rgba(217, 45, 32, 0.06); }
 .replay-toolcall-label { color: var(--text-muted); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.replay-toolcall-empty { color: var(--text-muted); font-size: 0.92rem; }
 .replay-text-render { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .markdown-render { display: grid; gap: 12px; line-height: 1.6; }
 .markdown-render > :first-child { margin-top: 0; }
@@ -416,6 +484,13 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .markdown-render table { width: 100%; border-collapse: collapse; }
 .markdown-render th, .markdown-render td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
 .markdown-render hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
+.replay-diff { display: grid; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.replay-diff__file { padding: 10px 12px; background: rgba(15, 23, 42, 0.04); color: var(--text-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.replay-diff__line { padding: 4px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; white-space: pre-wrap; word-break: break-word; }
+.replay-diff__line--ctx { background: rgba(15, 23, 42, 0.02); }
+.replay-diff__line--add { background: rgba(37, 162, 68, 0.08); color: #186c34; }
+.replay-diff__line--del { background: rgba(217, 45, 32, 0.08); color: #8e261d; }
+.replay-tool-result { display: grid; gap: 8px; }
 .empty { min-height: 320px; display: grid; place-items: center; color: var(--text-muted); }
 @media (max-width: 900px) {
   body { padding: 16px; }
@@ -435,6 +510,8 @@ function buildRuntime(autoplayDelayMs: number): string {
   const slider = document.getElementById('turn-slider');
   const counter = document.getElementById('turn-counter');
   const togglePlay = document.querySelector('[data-action="toggle-play"]');
+  const toggleThinking = document.getElementById('toggle-thinking');
+  const toggleTools = document.getElementById('toggle-tools');
   const first = document.querySelector('[data-action="first"]');
   const prev = document.querySelector('[data-action="prev"]');
   const next = document.querySelector('[data-action="next"]');
@@ -490,8 +567,20 @@ function buildRuntime(autoplayDelayMs: number): string {
   }
 
   function setDisclosureState(open) {
-    document.querySelectorAll('.turn-disclosure, .turn-block').forEach((node) => {
+    document.querySelectorAll('.turn-disclosure, .turn-block, .turn-tool-group').forEach((node) => {
       node.open = open;
+    });
+  }
+
+  function applyVisibility() {
+    const showThinking = !toggleThinking || toggleThinking.checked;
+    const showTools = !toggleTools || toggleTools.checked;
+
+    document.querySelectorAll('[data-replay-kind="thinking"]').forEach((node) => {
+      node.hidden = !showThinking;
+    });
+    document.querySelectorAll('[data-replay-kind="tool"]').forEach((node) => {
+      node.hidden = !showTools;
     });
   }
 
@@ -526,7 +615,10 @@ function buildRuntime(autoplayDelayMs: number): string {
   if (last) last.addEventListener('click', function () { stopPlayback(); setIndex(panels.length - 1); });
   if (expandAll) expandAll.addEventListener('click', function () { setDisclosureState(true); });
   if (collapseAll) collapseAll.addEventListener('click', function () { setDisclosureState(false); });
+  if (toggleThinking) toggleThinking.addEventListener('change', applyVisibility);
+  if (toggleTools) toggleTools.addEventListener('change', applyVisibility);
 
   sync();
+  applyVisibility();
 }())`
 }

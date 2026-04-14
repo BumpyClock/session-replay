@@ -88,8 +88,9 @@ describe('session materialization', () => {
       'markdown',
     ])
     expect(replay.turns[1]?.blocks[1]).toMatchObject({
-      input: expect.stringContaining('file_path'),
+      input: { file_path: '/tmp/demo-project/src/app.ts' },
       name: 'Read',
+      output: 'hello wrld',
       type: 'tool',
     })
   })

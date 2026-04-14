@@ -16,6 +16,9 @@ export function summarizeNormalizedSession(session: NormalizedSession): string |
   return firstUserTurn ? truncateText(firstUserTurn.userText, 96) : undefined;
 }
 
+/**
+ * Derive list/header counts from replay-ready turns instead of raw provider rows.
+ */
 export function createSessionStats(session: NormalizedSession): SessionStats {
   const replayTurns = buildReplayTurns(session);
   const toolCallCount = session.turns.reduce(
@@ -76,6 +79,8 @@ export function sessionMatchesQuery(
   session: NormalizedSession,
   query: string,
 ): boolean {
+  // Case-insensitive search spans metadata, user text, assistant text,
+  // tool names, tool input, and tool output.
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) {
     return false;
@@ -153,8 +158,11 @@ function toReplayBlock(block: SessionAssistantBlock): ReplayBlock {
           ? "failed"
           : "completed"
         : "running",
-      input: stringifyToolFragment(block.input),
+      input: block.input,
       output: block.result ?? undefined,
+      isError: block.isError,
+      resultTimestamp: block.resultTimestamp ?? undefined,
+      timestamp: block.timestamp ?? undefined,
     };
   }
 

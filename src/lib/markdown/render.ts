@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import type { ReplayBlock, ReplayTurn } from '../api/contracts'
 import { isReplayToolBlock } from '../replay/blocks'
+import { formatReplayToolBodyHtml, formatReplayToolStatusLabel } from '../replay/tool-format'
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -48,20 +49,7 @@ export function renderReplayBlockHtml(block: ReplayBlock): string {
 
 export function renderReplayBlockBodyHtml(block: ReplayBlock): string {
   if (isReplayToolBlock(block)) {
-    const input = block.input
-      ? `<div class="replay-toolcall-section">
-          <div class="replay-toolcall-label">Input</div>
-          <pre><code>${escapeHtml(block.input)}</code></pre>
-        </div>`
-      : ''
-    const output = block.output
-      ? `<div class="replay-toolcall-section">
-          <div class="replay-toolcall-label">Output</div>
-          <pre><code>${escapeHtml(block.output)}</code></pre>
-        </div>`
-      : ''
-
-    return `<div class="replay-toolcall-grid">${input}${output}</div>`
+    return formatReplayToolBodyHtml(block)
   }
 
   if (block.type === 'code' || block.type === 'json') {
@@ -85,7 +73,8 @@ export function renderReplayTurnBodyHtml(turn: Pick<ReplayTurn, 'blocks'>): stri
 
 function renderReplayBlockTitleHtml(block: ReplayBlock): string {
   if (isReplayToolBlock(block)) {
-    const status = block.status ? ` · ${escapeHtml(block.status)}` : ''
+    const statusLabel = formatReplayToolStatusLabel(block)
+    const status = statusLabel ? ` · ${escapeHtml(statusLabel)}` : ''
     return `<div class="replay-block-title">${escapeHtml(block.name)}${status}</div>`
   }
 

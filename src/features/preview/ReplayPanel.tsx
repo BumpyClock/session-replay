@@ -3,11 +3,19 @@ import { useEffect, useState } from 'react'
 import type { ReplayBlock } from '../../lib/api/contracts'
 import { renderReplayBlockBodyHtml } from '../../lib/markdown'
 import {
-  getReplayBlockDefaultOpen,
   getReplayBlockLabel,
   getReplayBlockSummaryMeta,
   getReplayTurnTone,
 } from '../../lib/replay/blocks'
+import {
+  createReplaySegments,
+  getReplaySegmentDefaultOpen,
+  getReplaySegmentDisclosureIds,
+  getReplayToolRunLabel,
+  getReplayToolRunSummaryMeta,
+  shouldGroupReplayToolRun,
+  type ReplaySegment,
+} from '../../lib/replay/segments'
 
 export type PreviewTurnRole = 'user' | 'assistant' | 'tool'
 
@@ -60,7 +68,9 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
     setExpandedBlockIds(
       new Set(
         session.turns.flatMap((turn) =>
-          turn.blocks.filter(getReplayBlockDefaultOpen).map((block) => block.id),
+          createReplaySegments(turn.blocks).flatMap((segment) =>
+            getReplaySegmentDefaultOpen(segment) ? getReplaySegmentDisclosureIds(segment) : [],
+          ),
         ),
       ),
     )
@@ -72,7 +82,13 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
     }
 
     setExpandedTurnIds(new Set(session.turns.map((turn) => turn.id)))
-    setExpandedBlockIds(new Set(session.turns.flatMap((turn) => turn.blocks.map((block) => block.id))))
+    setExpandedBlockIds(
+      new Set(
+        session.turns.flatMap((turn) =>
+          createReplaySegments(turn.blocks).flatMap((segment) => getReplaySegmentDisclosureIds(segment)),
+        ),
+      ),
+    )
   }
 
   const collapseAll = () => {
@@ -168,12 +184,12 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
                         <span className="replay-turn__summary-label">{turn.summary}</span>
                       </summary>
                       <div className="replay-turn__body">
-                        {turn.blocks.map((block) => (
-                          <ReplayBlockDisclosure
-                            key={block.id}
-                            block={block}
-                            isOpen={expandedBlockIds.has(block.id)}
-                            onToggle={() => toggleBlock(block.id)}
+                        {createReplaySegments(turn.blocks).map((segment) => (
+                          <ReplaySegmentDisclosure
+                            key={segment.id}
+                            expandedBlockIds={expandedBlockIds}
+                            segment={segment}
+                            onToggle={toggleBlock}
                           />
                         ))}
                       </div>
@@ -190,6 +206,86 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
   )
 }
 
+function ReplaySegmentDisclosure({
+  expandedBlockIds,
+  onToggle,
+  segment,
+}: {
+  expandedBlockIds: ReadonlySet<string>
+  onToggle: (id: string) => void
+  segment: ReplaySegment
+}) {
+  if (segment.type === 'block') {
+    if (segment.block.type !== 'thinking') {
+      return <ReplayInlineBlock block={segment.block} />
+    }
+
+    return (
+      <ReplayBlockDisclosure
+        block={segment.block}
+        isOpen={expandedBlockIds.has(segment.block.id)}
+        onToggle={() => onToggle(segment.block.id)}
+      />
+    )
+  }
+
+  if (!shouldGroupReplayToolRun(segment)) {
+    return (
+      <div className="replay-tool-run">
+        {segment.blocks.map((block) => (
+          <ReplayBlockDisclosure
+            key={block.id}
+            block={block}
+            isOpen={expandedBlockIds.has(block.id)}
+            onToggle={() => onToggle(block.id)}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  const isOpen = expandedBlockIds.has(segment.id)
+  const summaryMeta = getReplayToolRunSummaryMeta(segment)
+
+  return (
+    <details className="replay-tool-group" open={isOpen}>
+      <summary
+        className="replay-tool-group__summary"
+        onClick={(event) => {
+          event.preventDefault()
+          onToggle(segment.id)
+        }}
+      >
+        <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
+        <span className="replay-tool-group__label">{getReplayToolRunLabel(segment)}</span>
+        {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
+      </summary>
+      <div className="replay-tool-group__content">
+        {segment.blocks.map((block) => (
+          <ReplayBlockDisclosure
+            key={block.id}
+            block={block}
+            isOpen={expandedBlockIds.has(block.id)}
+            onToggle={() => onToggle(block.id)}
+          />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function ReplayInlineBlock({ block }: { block: Exclude<ReplayBlock, { type: 'tool' }> }) {
+  return (
+    <div className={`replay-inline-block replay-inline-block--${block.type}`}>
+      {block.title ? <div className="replay-inline-block__title">{block.title}</div> : null}
+      <div
+        className="replay-inline-block__content"
+        dangerouslySetInnerHTML={{ __html: renderReplayBlockBodyHtml(block) }}
+      />
+    </div>
+  )
+}
+
 function ReplayBlockDisclosure({
   block,
   isOpen,
@@ -200,6 +296,10 @@ function ReplayBlockDisclosure({
   onToggle: () => void
 }) {
   const summaryMeta = getReplayBlockSummaryMeta(block)
+  const contentClassName =
+    block.type === 'tool'
+      ? 'replay-disclosure__content replay-disclosure__content--tool'
+      : 'replay-disclosure__content'
 
   return (
     <details className={`replay-disclosure replay-disclosure--${block.type}`} open={isOpen}>
@@ -215,7 +315,7 @@ function ReplayBlockDisclosure({
         {summaryMeta ? <span className="replay-disclosure__summary-meta">{summaryMeta}</span> : null}
       </summary>
       <div
-        className="replay-disclosure__content"
+        className={contentClassName}
         dangerouslySetInnerHTML={{ __html: renderReplayBlockBodyHtml(block) }}
       />
     </details>

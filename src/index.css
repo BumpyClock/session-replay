@@ -736,6 +736,80 @@ small {
   padding: 0 var(--space-3) var(--space-3);
 }
 
+.replay-inline-block {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.replay-inline-block__title {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.replay-inline-block__content {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.replay-tool-run {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.replay-tool-group {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--color-surface-solid) 88%, transparent);
+  overflow: hidden;
+}
+
+.replay-tool-group__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  cursor: pointer;
+  font-size: var(--font-size-3);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.replay-tool-group__summary::-webkit-details-marker {
+  display: none;
+}
+
+.replay-tool-group__label {
+  flex: 0 1 auto;
+}
+
+.replay-tool-group__meta {
+  margin-left: auto;
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-3);
+  font-weight: 500;
+  text-align: right;
+}
+
+.replay-tool-group__chevron {
+  flex-shrink: 0;
+  color: var(--color-text-subtle);
+  transition: transform 160ms ease;
+}
+
+.replay-tool-group__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.replay-tool-group__content {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
 .replay-disclosure--thinking {
   border-style: dashed;
 }
@@ -756,8 +830,67 @@ small {
   color: var(--color-text-subtle);
 }
 
+.replay-disclosure__content--tool {
+  padding-top: 2px;
+}
+
 .replay-disclosure--tool .replay-disclosure__summary {
   color: var(--color-primary);
+}
+
+.replay-toolcall-empty {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-4);
+}
+
+.replay-toolcall-section--error pre,
+.replay-tool-result--error pre {
+  border-color: color-mix(in srgb, var(--color-danger) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger-soft) 68%, transparent);
+}
+
+.replay-diff {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.replay-diff__file {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.replay-diff__line {
+  padding: 4px 12px;
+  font-family: var(--mono-stack);
+  font-size: var(--font-size-4);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.replay-diff__line--ctx {
+  background: color-mix(in srgb, var(--color-text) 2%, transparent);
+}
+
+.replay-diff__line--add {
+  background: color-mix(in srgb, var(--color-success-soft) 78%, transparent);
+  color: color-mix(in srgb, var(--color-success) 88%, black);
+}
+
+.replay-diff__line--del {
+  background: color-mix(in srgb, var(--color-danger-soft) 78%, transparent);
+  color: color-mix(in srgb, var(--color-danger) 88%, black);
+}
+
+.replay-tool-result {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .export-card .card__header {

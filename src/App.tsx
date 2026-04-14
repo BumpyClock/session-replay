@@ -19,6 +19,7 @@ import type {
 } from './lib/api/contracts'
 import type { SessionWarning } from './lib/session'
 import { summarizeReplayTurn } from './lib/replay/blocks'
+import { formatReplayToolEditorText } from './lib/replay/tool-format'
 import { Button } from './components/ui/button'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
@@ -69,13 +70,7 @@ function formatBlockEditorText(
     return block.text
   }
 
-  return [
-    block.name,
-    block.input ? `Input\n${block.input}` : '',
-    block.output ? `Output\n${block.output}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  return formatReplayToolEditorText(block)
 }
 
 function makeReplaySession(
