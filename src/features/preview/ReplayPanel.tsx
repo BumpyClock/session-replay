@@ -16,6 +16,7 @@ import {
   shouldGroupReplayToolRun,
   type ReplaySegment,
 } from '../../lib/replay/segments'
+import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../lib/replay/context-blocks'
 
 export type PreviewTurnRole = 'user' | 'assistant' | 'tool'
 
@@ -54,17 +55,14 @@ const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
 }
 
 function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
-  const [expandedTurnIds, setExpandedTurnIds] = useState<Set<string>>(new Set())
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!session) {
-      setExpandedTurnIds(new Set())
       setExpandedBlockIds(new Set())
       return
     }
 
-    setExpandedTurnIds(new Set(session.turns.map((turn) => turn.id)))
     setExpandedBlockIds(
       new Set(
         session.turns.flatMap((turn) =>
@@ -81,7 +79,6 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
       return
     }
 
-    setExpandedTurnIds(new Set(session.turns.map((turn) => turn.id)))
     setExpandedBlockIds(
       new Set(
         session.turns.flatMap((turn) =>
@@ -92,20 +89,7 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
   }
 
   const collapseAll = () => {
-    setExpandedTurnIds(new Set())
     setExpandedBlockIds(new Set())
-  }
-
-  const toggleTurn = (turnId: string) => {
-    setExpandedTurnIds((current) => {
-      const next = new Set(current)
-      if (next.has(turnId)) {
-        next.delete(turnId)
-      } else {
-        next.add(turnId)
-      }
-      return next
-    })
   }
 
   const toggleBlock = (blockId: string) => {
@@ -158,7 +142,6 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
             {session.turns.map((turn) => {
               const Icon = roleIconMap[turn.role]
               const turnTone = getReplayTurnTone(turn)
-              const isTurnOpen = expandedTurnIds.has(turn.id)
               return (
                 <li
                   key={turn.id}
@@ -168,32 +151,23 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
                     <Icon size={12} strokeWidth={1.8} />
                   </div>
                   <div className="replay-turn__meta">
-                    <p className="replay-turn__top">
-                      <span>{turn.role}</span>
-                      <span>{turn.timeLabel}</span>
-                    </p>
-                    <details className="replay-turn__details" open={isTurnOpen}>
-                      <summary
-                        className="replay-turn__summary"
-                        onClick={(event) => {
-                          event.preventDefault()
-                          toggleTurn(turn.id)
-                        }}
-                      >
-                        <ChevronDown size={12} className={`replay-turn__chevron ${isTurnOpen ? 'is-open' : ''}`} />
-                        <span className="replay-turn__summary-label">{turn.summary}</span>
-                      </summary>
-                      <div className="replay-turn__body">
-                        {createReplaySegments(turn.blocks).map((segment) => (
-                          <ReplaySegmentDisclosure
-                            key={segment.id}
-                            expandedBlockIds={expandedBlockIds}
-                            segment={segment}
-                            onToggle={toggleBlock}
-                          />
-                        ))}
+                    <div className="replay-turn__header">
+                      <div className="replay-turn__top">
+                        <span className="replay-turn__role-label">{formatPreviewRoleLabel(turn.role)}</span>
+                        <span className="replay-turn__summary-inline">{turn.summary}</span>
                       </div>
-                    </details>
+                      {turn.timeLabel ? <p className="replay-turn__timestamp">{turn.timeLabel}</p> : null}
+                    </div>
+                    <div className="replay-turn__body">
+                      {createReplaySegments(turn.blocks).map((segment) => (
+                        <ReplaySegmentDisclosure
+                          key={segment.id}
+                          expandedBlockIds={expandedBlockIds}
+                          segment={segment}
+                          onToggle={toggleBlock}
+                        />
+                      ))}
+                    </div>
                     {turn.isBookmarked ? <span className="replay-turn__bookmark">bookmarked</span> : null}
                   </div>
                 </li>
@@ -206,6 +180,10 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
   )
 }
 
+function formatPreviewRoleLabel(role: PreviewTurnRole): string {
+  return `${role}:`.toUpperCase()
+}
+
 function ReplaySegmentDisclosure({
   expandedBlockIds,
   onToggle,
@@ -216,7 +194,7 @@ function ReplaySegmentDisclosure({
   segment: ReplaySegment
 }) {
   if (segment.type === 'block') {
-    if (segment.block.type !== 'thinking') {
+    if (segment.block.type !== 'thinking' && !(segment.block.type === 'meta' && segment.block.appearance === 'disclosure')) {
       return <ReplayInlineBlock block={segment.block} />
     }
 
@@ -274,10 +252,10 @@ function ReplaySegmentDisclosure({
   )
 }
 
-function ReplayInlineBlock({ block }: { block: Exclude<ReplayBlock, { type: 'tool' }> }) {
+function ReplayInlineBlock({ block }: { block: ReplayRenderableTextBlock }) {
   return (
     <div className={`replay-inline-block replay-inline-block--${block.type}`}>
-      {block.title ? <div className="replay-inline-block__title">{block.title}</div> : null}
+      {block.type !== 'meta' && block.title ? <div className="replay-inline-block__title">{block.title}</div> : null}
       <div
         className="replay-inline-block__content"
         dangerouslySetInnerHTML={{ __html: renderReplayBlockBodyHtml(block) }}
@@ -291,7 +269,7 @@ function ReplayBlockDisclosure({
   isOpen,
   onToggle,
 }: {
-  block: ReplayBlock
+  block: ReplayRenderableBlock
   isOpen: boolean
   onToggle: () => void
 }) {
@@ -299,6 +277,8 @@ function ReplayBlockDisclosure({
   const contentClassName =
     block.type === 'tool'
       ? 'replay-disclosure__content replay-disclosure__content--tool'
+      : block.type === 'meta'
+        ? 'replay-disclosure__content replay-disclosure__content--meta'
       : 'replay-disclosure__content'
 
   return (

@@ -18,6 +18,7 @@ import {
   getReplayToolRunSummaryMeta,
   shouldGroupReplayToolRun,
 } from '../../src/lib/replay/segments'
+import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../src/lib/replay/context-blocks'
 
 const DEFAULT_AUTOPLAY_DELAY = 1400
 
@@ -240,21 +241,21 @@ function renderTurnListItem(turn: ReplayTurn, active: boolean): string {
 }
 
 function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): string {
-  const time = turn.timestamp ? `<time>${escapeHtml(turn.timestamp)}</time>` : ''
+  const summary = summarizeReplayTurn(turn)
+  const time = turn.timestamp ? `<time class="turn-header-time">${escapeHtml(turn.timestamp)}</time>` : ''
   const tone = getReplayTurnTone(turn)
 
   return `<article class="turn-panel turn-panel--${escapeHtml(tone)}${active ? ' is-active' : ''}" data-turn-index="${turnIndex}" ${active ? '' : 'hidden'}>
     <header class="turn-header">
-      <div>
-        <span class="turn-role role-${escapeHtml(turn.role)}">${escapeHtml(turn.role)}</span>
-        <h2>${escapeHtml(turn.label ?? `Turn ${turnIndex + 1}`)}</h2>
+      <div class="turn-header-main">
+        <div class="turn-header-top">
+          <span class="turn-role turn-role--label">${escapeHtml(formatReplayRoleLabel(turn.role))}</span>
+          <span class="turn-header-summary">${escapeHtml(summary)}</span>
+        </div>
+        ${time}
       </div>
-      ${time}
     </header>
-    <details class="turn-disclosure" open>
-      <summary class="turn-disclosure-summary">${escapeHtml(summarizeReplayTurn(turn))}</summary>
-      <div class="turn-body">${renderReplayTurnSegments(turn.blocks)}</div>
-    </details>
+    <div class="turn-body">${renderReplayTurnSegments(turn.blocks)}</div>
   </article>`
 }
 
@@ -262,7 +263,7 @@ function renderReplayTurnSegments(blocks: readonly ReplayBlock[]): string {
   return createReplaySegments(blocks)
     .map((segment) => {
       if (segment.type === 'block') {
-        if (segment.block.type !== 'thinking') {
+        if (segment.block.type !== 'thinking' && !(segment.block.type === 'meta' && segment.block.appearance === 'disclosure')) {
           return renderReplayInlineBlock(segment.block)
         }
 
@@ -285,8 +286,11 @@ function renderReplayTurnSegments(blocks: readonly ReplayBlock[]): string {
     .join('')
 }
 
-function renderReplayInlineBlock(block: ReplayBlock): string {
-  const title = 'title' in block && block.title ? `<div class="turn-inline-block-title">${escapeHtml(block.title)}</div>` : ''
+function renderReplayInlineBlock(block: ReplayRenderableTextBlock): string {
+  const title =
+    block.type !== 'meta' && 'title' in block && block.title
+      ? `<div class="turn-inline-block-title">${escapeHtml(block.title)}</div>`
+      : ''
 
   return `<div class="turn-inline-block turn-inline-block--${escapeHtml(block.type)}">
     ${title}
@@ -294,13 +298,17 @@ function renderReplayInlineBlock(block: ReplayBlock): string {
   </div>`
 }
 
-function renderReplayTurnBlock(block: ReplayBlock): string {
+function renderReplayTurnBlock(block: ReplayRenderableBlock): string {
   const open = getReplayBlockDefaultOpen(block)
   const summaryMeta = getReplayBlockSummaryMeta(block)
   const replayKind =
     block.type === 'thinking' ? ' data-replay-kind="thinking"' : block.type === 'tool' ? ' data-replay-kind="tool"' : ''
   const contentClassName =
-    block.type === 'tool' ? 'turn-block-content turn-block-content--tool' : 'turn-block-content'
+    block.type === 'tool'
+      ? 'turn-block-content turn-block-content--tool'
+      : block.type === 'meta'
+        ? 'turn-block-content turn-block-content--meta'
+        : 'turn-block-content'
 
   return `<details class="turn-block turn-block--${escapeHtml(block.type)}"${open ? ' open' : ''}${replayKind}>
     <summary class="turn-block-summary">
@@ -347,6 +355,10 @@ function resolveInitialTurnIndex(
   }
 
   return 0
+}
+
+function formatReplayRoleLabel(role: ReplayTurn['role']): string {
+  return `${role}:`.toUpperCase()
 }
 
 function escapeHtml(value: string): string {
@@ -422,6 +434,7 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-item--thinking, .turn-panel--thinking { border-left: 3px solid rgba(224, 115, 40, 0.55); }
 .turn-item--tool, .turn-panel--tool { border-left: 3px solid rgba(35, 131, 226, 0.55); }
 .turn-role { display: inline-flex; width: fit-content; align-items: center; justify-content: center; min-height: 24px; padding: 0 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; text-transform: capitalize; }
+.turn-role--label { min-height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--text); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.78rem; }
 .role-user { background: rgba(35, 131, 226, 0.11); color: var(--primary); }
 .role-assistant { background: rgba(37, 162, 68, 0.11); color: var(--success); }
 .role-system { background: rgba(224, 115, 40, 0.11); color: var(--warning); }
@@ -429,16 +442,19 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-label { font-weight: 600; line-height: 1.4; }
 .viewer { min-height: 640px; }
 .turn-panel { display: grid; gap: 18px; }
-.turn-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
-.turn-header h2 { margin: 10px 0 0; font-size: 1.15rem; }
-.turn-disclosure, .turn-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); overflow: hidden; }
-.turn-disclosure-summary, .turn-block-summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; font-weight: 600; }
-.turn-disclosure-summary::-webkit-details-marker, .turn-block-summary::-webkit-details-marker { display: none; }
-.turn-disclosure-summary::before, .turn-block-summary::before { content: '▸'; color: var(--text-muted); transition: transform 120ms ease; }
-.turn-disclosure[open] > .turn-disclosure-summary::before, .turn-block[open] > .turn-block-summary::before { transform: rotate(90deg); }
-.turn-disclosure-summary { background: rgba(15, 23, 42, 0.04); }
-.turn-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.turn-header { display: grid; gap: 4px; }
+.turn-header-main { display: grid; gap: 4px; }
+.turn-header-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.turn-header-summary, .turn-header-time { color: var(--text-muted); font-size: 0.82rem; }
+.turn-header-summary { margin-left: auto; text-align: right; }
+.turn-body { display: grid; gap: 12px; }
+.turn-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); overflow: hidden; }
+.turn-block-summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; font-weight: 600; }
+.turn-block-summary::-webkit-details-marker { display: none; }
+.turn-block-summary::before { content: '▸'; color: var(--text-muted); transition: transform 120ms ease; }
+.turn-block[open] > .turn-block-summary::before { transform: rotate(90deg); }
 .turn-inline-block { display: grid; gap: 10px; }
+.turn-inline-block--meta { gap: 0; }
 .turn-inline-block-title { color: var(--text-muted); font-size: 0.83rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .turn-inline-block-content { display: grid; gap: 10px; }
 .turn-tool-run { display: grid; gap: 12px; }
@@ -454,12 +470,64 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-tool-group-meta { color: var(--text-muted); font-size: 0.82rem; font-weight: 500; margin-left: auto; text-align: right; }
 .turn-tool-group-content { display: grid; gap: 12px; padding: 0 16px 16px; }
 .turn-block--thinking { border-style: dashed; }
+.turn-block--meta { background: rgba(255,255,255,0.97); }
 .turn-block--thinking .turn-block-summary,
-.turn-block--tool .turn-block-summary { font-size: 0.82rem; }
+.turn-block--tool .turn-block-summary,
+.turn-block--meta .turn-block-summary { font-size: 0.82rem; }
 .turn-block--thinking .turn-block-content,
-.turn-block--tool .turn-block-content { font-size: 0.92rem; color: var(--text-muted); }
+.turn-block--tool .turn-block-content,
+.turn-block--meta .turn-block-content { font-size: 0.92rem; color: var(--text-muted); }
 .turn-block--tool .turn-block-summary { color: var(--danger); }
 .turn-block-content--tool { padding-top: 2px; }
+.turn-block-content--meta { padding-top: 2px; }
+.replay-meta-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--text-muted);
+}
+.replay-meta-pill__label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+.replay-meta-pill__title { color: var(--text); font-weight: 600; }
+.replay-meta-pill__summary { font-size: 0.82rem; }
+.replay-meta-card { display: grid; gap: 12px; }
+.replay-meta-card__header { display: grid; gap: 8px; }
+.replay-meta-card__title { color: var(--text); font-size: 0.95rem; font-weight: 600; }
+.replay-meta-card__chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.replay-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(35, 131, 226, 0.14);
+  background: rgba(35, 131, 226, 0.08);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: lowercase;
+}
+.replay-meta-card__body p { margin: 0; }
+.replay-meta-card__fields { margin: 0; display: grid; gap: 10px; }
+.replay-meta-card__field { display: grid; gap: 2px; }
+.replay-meta-card__field dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.replay-meta-card__field dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.88rem;
+}
 .replay-body-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); padding: 16px; }
 .replay-body-block--thinking { border-style: dashed; }
 .replay-block-title { margin-bottom: 10px; color: var(--text-muted); font-size: 0.83rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -567,7 +635,7 @@ function buildRuntime(autoplayDelayMs: number): string {
   }
 
   function setDisclosureState(open) {
-    document.querySelectorAll('.turn-disclosure, .turn-block, .turn-tool-group').forEach((node) => {
+    document.querySelectorAll('.turn-block, .turn-tool-group').forEach((node) => {
       node.open = open;
     });
   }

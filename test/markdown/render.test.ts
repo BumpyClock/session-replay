@@ -70,4 +70,61 @@ describe('renderReplayTurnBodyHtml', () => {
     expect(html).not.toContain('<script>alert(1)</script>')
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
   })
+
+  it('collapses skill context scaffolding into rich replay metadata blocks', () => {
+    const html = renderReplayTurnBodyHtml(
+      createTurn(
+        [
+          'Plan next step.',
+          '',
+          '<skill-context name="ux-designer">',
+          'Base directory for this skill: /skills/ux-designer',
+          '',
+          'Related files (use view tool to read):',
+          '  - /skills/ux-designer/design-direction.md',
+          '  - /skills/ux-designer/interaction-visual-clarity.md',
+          '',
+          '---',
+          'name: ux-designer',
+          'description: Create UX design documentation, layout specs, interaction flows, and style guides.',
+          'context: fork',
+          '---',
+          '',
+          '# Core Workflow',
+          '',
+          '## Design Direction',
+          '</skill-context>',
+        ].join('\n'),
+      ),
+    )
+
+    expect(html).toContain('Plan next step.')
+    expect(html).toContain('Skill context')
+    expect(html).toContain('ux-designer')
+    expect(html).toContain('2 refs')
+    expect(html).not.toContain('&lt;skill-context')
+  })
+
+  it('collapses AGENTS instruction bundles into workspace instruction cards', () => {
+    const html = renderReplayTurnBodyHtml(
+      createTurn(
+        [
+          'Loaded AGENTS.md',
+          '',
+          '## Communication style',
+          '- Use telegraph style',
+          '',
+          '## Agent Protocols',
+          '- Use tasque',
+          '',
+          '## Priorities',
+          '- Fix root cause',
+        ].join('\n'),
+      ),
+    )
+
+    expect(html).toContain('Workspace instructions')
+    expect(html).toContain('AGENTS.md')
+    expect(html).not.toContain('## Communication style')
+  })
 })

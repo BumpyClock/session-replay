@@ -1,5 +1,6 @@
-import type { ReplayBlock, ReplayTextBlock, ReplayToolBlock } from '../api/contracts'
+import type { ReplayBlock, ReplayToolBlock } from '../api/contracts'
 import { getReplayBlockDefaultOpen, getReplayBlockLabel } from './blocks'
+import { expandReplayBlocks, type ReplayRenderableTextBlock } from './context-blocks'
 
 const TOOL_RUN_GROUP_THRESHOLD = 4
 
@@ -7,7 +8,7 @@ export type ReplaySegment =
   | {
       id: string
       type: 'block'
-      block: ReplayTextBlock
+      block: ReplayRenderableTextBlock
     }
   | {
       id: string
@@ -36,7 +37,7 @@ export function createReplaySegments(blocks: readonly ReplayBlock[]): ReplaySegm
     toolRun = []
   }
 
-  for (const block of blocks) {
+  for (const block of expandReplayBlocks(blocks)) {
     if (block.type === 'tool') {
       toolRun.push(block)
       continue
@@ -64,9 +65,14 @@ export function getReplaySegmentDefaultOpen(segment: ReplaySegment): boolean {
 
 export function getReplaySegmentDisclosureIds(segment: ReplaySegment): string[] {
   if (segment.type === 'block') {
-    return segment.block.type === 'thinking' ? [segment.block.id] : []
+    return segment.block.type === 'thinking'
+      || (segment.block.type === 'meta' && segment.block.appearance === 'disclosure')
+      ? [segment.block.id]
+      : []
   }
 
+  // Group-level toggles fan out to child tool disclosures so expand/collapse-all
+  // keeps grouped runs and individual tool panels in sync.
   return [segment.id, ...segment.blocks.map((block) => block.id)]
 }
 

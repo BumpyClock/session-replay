@@ -25,7 +25,27 @@ function createFixtureSession(): MaterializedReplaySession {
         blocks: [
           {
             id: 'turn-1-user',
-            text: 'Inspect export flow',
+            text: [
+              'Inspect export flow',
+              '',
+              '<skill-context name="ux-designer">',
+              'Base directory for this skill: /skills/ux-designer',
+              '',
+              'Related files (use view tool to read):',
+              '  - /skills/ux-designer/design-direction.md',
+              '  - /skills/ux-designer/interaction-visual-clarity.md',
+              '',
+              '---',
+              'name: ux-designer',
+              'description: Create UX design documentation, layout specs, interaction flows, and style guides.',
+              'context: fork',
+              '---',
+              '',
+              '# Core Workflow',
+              '',
+              '## Design Direction',
+              '</skill-context>',
+            ].join('\n'),
             type: 'text',
           },
         ],
@@ -116,8 +136,11 @@ describe('renderReplayDocument', () => {
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
     expect(revealedThinkingHtml).toContain('id="toggle-thinking" type="checkbox" checked')
     expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
-    expect(revealedThinkingHtml).toContain('<time>2026-04-13T08:00:01.000Z</time>')
+    expect(revealedThinkingHtml).toContain('<time class="turn-header-time">2026-04-13T08:00:01.000Z</time>')
     expect(revealedThinkingHtml).toContain('<details class="turn-block turn-block--tool" data-replay-kind="tool">')
+    expect(revealedThinkingHtml).toContain('Skill context')
+    expect(revealedThinkingHtml).toContain('ux-designer')
+    expect(revealedThinkingHtml).not.toContain('&lt;skill-context')
   })
 
   it('filters tool blocks when export disables tool call rendering', () => {
