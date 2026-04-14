@@ -49,7 +49,7 @@ export function createSearchDocFromSession(
     [
       ...session.turns.map((turn) => turn.userText),
       ...session.turns.flatMap((turn) =>
-        turn.assistantBlocks.flatMap((block) =>
+        [...turn.systemBlocks, ...turn.assistantBlocks].flatMap((block) =>
           block.kind === 'tool-call'
             ? [block.name, stringifyToolFragment(block.input), block.result ?? '']
             : [block.text],

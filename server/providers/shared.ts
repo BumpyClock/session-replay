@@ -66,6 +66,7 @@ export function createTurn(input: CreateTurnInput): NormalizedTurn {
     role: 'turn',
     timestamp: input.timestamp ?? null,
     userText: input.userText.trim(),
+    systemBlocks: [],
     assistantBlocks: [],
     sourceMeta: createSourceMeta({
       filePath: input.filePath,
@@ -173,6 +174,7 @@ export function finalizeTurns(turns: NormalizedTurn[]): NormalizedTurn[] {
     .filter((turn) => {
       return Boolean(
         turn.userText ||
+          turn.systemBlocks.length > 0 ||
           turn.assistantBlocks.length > 0,
       )
     })
@@ -335,6 +337,10 @@ export function toolResultText(value: unknown): string | null {
   return null
 }
 
+/**
+ * Attach a tool result to the most recent matching tool call, including
+ * decomposed `toolId:` child edits emitted from compound calls like apply_patch.
+ */
 export function attachToolResult(
   assistantBlocks: SessionAssistantBlock[],
   toolId: string,
@@ -389,6 +395,10 @@ export function createSessionFileRef(
   }
 }
 
+/**
+ * Build one catalog index row with refreshed summary/stats and normalized
+ * search text derived from the fully loaded session payload.
+ */
 export function createIndexedSessionEntry(
   file: Readonly<SessionFileRef>,
   session: Readonly<NormalizedSession>,

@@ -144,6 +144,7 @@ export async function loadClaudeSession(
       role: 'turn' as const,
       timestamp: turn.timestamp,
       userText: turn.userText,
+      systemBlocks: [],
       assistantBlocks: turn.assistantBlocks.map((block, blockIndex) =>
         block.kind === 'tool-call'
           ? {

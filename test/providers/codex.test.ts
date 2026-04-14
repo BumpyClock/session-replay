@@ -41,7 +41,7 @@ describe('Codex provider', () => {
     expect(indexed.ref.path).toBe(sessionPath)
     expect(indexed.ref.summary).toBe('List my backlog')
     expect(indexed.ref.stats).toEqual({
-      turnCount: 2,
+      turnCount: 3,
       userTurnCount: 1,
       assistantTurnCount: 1,
       toolCallCount: 1,
@@ -63,11 +63,15 @@ describe('Codex provider', () => {
       updatedAt: indexed.ref.updatedAt,
     })
     expect(loaded.cwd).toBe('/Users/dev/projects/alpha')
-    expect(loaded.turns).toHaveLength(1)
-    expect(loaded.turns[0]?.userText).toBe('List my backlog')
-    expect(loaded.turns[0]?.assistantBlocks[0]?.text).toBe('I can do that.')
-    expect(loaded.turns[0]?.toolCalls[0]?.name).toBe('Bash')
-    expect(loaded.turns[0]?.toolCalls[0]?.result).toBe('done')
+    expect(loaded.turns).toHaveLength(2)
+    expect(loaded.turns[0]?.systemBlocks[0]?.text).toContain('<session_meta>')
+    expect(loaded.turns[1]?.userText).toBe('List my backlog')
+    expect(loaded.turns[1]?.assistantBlocks[0]?.text).toBe('I can do that.')
+    expect(loaded.turns[1]?.assistantBlocks[1]).toMatchObject({
+      kind: 'tool-call',
+      name: 'Bash',
+      result: 'done',
+    })
   })
 
   it('keeps compat exports routed through catalog index/load flow', async () => {
@@ -90,9 +94,17 @@ describe('Codex provider', () => {
     })
     expect(loaded.project).toBe('alpha')
     expect(loaded.cwd).toBe('/Users/dev/projects/alpha')
-    expect(loaded.turns).toHaveLength(2)
-    expect(loaded.turns[0]?.blocks[0]?.text).toBe('List my backlog')
-    expect(loaded.turns[1]?.toolCalls?.[0]?.name).toBe('Bash')
+    expect(loaded.turns).toHaveLength(3)
+    expect(loaded.turns[0]?.role).toBe('system')
+    expect(loaded.turns[1]?.blocks[0]?.text).toBe('List my backlog')
+    expect(loaded.turns[2]?.blocks[0]).toMatchObject({
+      text: 'I can do that.',
+      type: 'markdown',
+    })
+    expect(loaded.turns[2]?.blocks[1]).toMatchObject({
+      name: 'Bash',
+      type: 'tool',
+    })
 
     const byProject = await searchCodexSessions(homeDirectory, { query: 'alpha', limit: 10 })
     expect(byProject).toHaveLength(1)

@@ -92,14 +92,19 @@ describe('codex catalog provider', () => {
 
     const indexed = await provider.index(files[0]!)
     expect(indexed.ref.project).toBe('alpha')
-    expect(indexed.ref.stats?.turnCount).toBe(2)
+    expect(indexed.ref.stats?.turnCount).toBe(3)
     expect(indexed.searchDoc.transcriptText).toContain('list my backlog')
 
     const loaded = await provider.load(files[0]!)
     expect(loaded.cwd).toBe('/Users/dev/projects/alpha')
-    expect(loaded.turns).toHaveLength(1)
-    expect(loaded.turns[0]?.assistantBlocks[0]?.text).toBe('I can do that.')
-    expect(loaded.turns[0]?.toolCalls[0]?.name).toBe('Bash')
+    expect(loaded.turns).toHaveLength(2)
+    expect(loaded.turns[0]?.systemBlocks[0]?.text).toContain('<session_meta>')
+    expect(loaded.turns[1]?.assistantBlocks[0]?.text).toBe('I can do that.')
+    expect(loaded.turns[1]?.assistantBlocks[1]).toMatchObject({
+      kind: 'tool-call',
+      name: 'Bash',
+      result: 'done',
+    })
   })
 
   it('keeps helper exports routed through the catalog path', async () => {
@@ -109,7 +114,8 @@ describe('codex catalog provider', () => {
 
     const loaded = await loadCodexSession({ sessionId: sessions[0]?.id, homeDirectory })
     expect(loaded.project).toBe('alpha')
-    expect(loaded.turns[0]?.blocks[0]?.text).toBe('List my backlog')
+    expect(loaded.turns[0]?.role).toBe('system')
+    expect(loaded.turns[1]?.blocks[0]?.text).toBe('List my backlog')
 
     const searchResults = await searchCodexSessions(homeDirectory, { query: 'backlog', limit: 10 })
     expect(searchResults).toHaveLength(1)

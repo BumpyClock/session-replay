@@ -127,4 +127,51 @@ describe('renderReplayTurnBodyHtml', () => {
     expect(html).toContain('AGENTS.md')
     expect(html).not.toContain('## Communication style')
   })
+
+  it('collapses Codex permissions scaffolding into a runtime permissions card', () => {
+    const html = renderReplayTurnBodyHtml(
+      createTurn(
+        [
+          '<permissions instructions>',
+          'Filesystem sandboxing defines which files can be read or written. sandbox_mode is danger-full-access: No filesystem sandboxing - all commands are permitted. Network access is enabled.',
+          'Approval policy is currently never. Do not provide the sandbox_permissions for any reason, commands will be rejected.',
+          '</permissions instructions>',
+        ].join('\n'),
+      ),
+    )
+
+    expect(html).toContain('Runtime permissions')
+    expect(html).toContain('danger-full-access')
+    expect(html).toContain('never')
+    expect(html).toContain('Raw transcript')
+  })
+
+  it('removes current_datetime scaffolding while preserving surrounding text', () => {
+    const html = renderReplayTurnBodyHtml(
+      createTurn(
+        [
+          '<current_datetime>2026-04-14T22:21:40.311Z</current_datetime>',
+          '',
+          'ok lets make these updates then.',
+        ].join('\n'),
+      ),
+    )
+
+    expect(html).toContain('ok lets make these updates then.')
+    expect(html).not.toContain('2026-04-14T22:21:40.311Z')
+    expect(html).not.toContain('&lt;current_datetime')
+  })
+
+  it('collapses subagent notifications into agent activity cards', () => {
+    const html = renderReplayTurnBodyHtml(
+      createTurn(
+        '<subagent_notification>{"agent_id":"agent-1","agent_path":"/tmp/subagents/agent-1","status":{"completed":"Findings ready"}}<\/subagent_notification>',
+      ),
+    )
+
+    expect(html).toContain('Sub-agent')
+    expect(html).toContain('completed')
+    expect(html).toContain('Findings ready')
+    expect(html).toContain('Raw transcript')
+  })
 })

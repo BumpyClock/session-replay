@@ -204,4 +204,88 @@ describe('ReplayPanel', () => {
       vi.useRealTimers()
     }
   })
+
+  it('groups short sequential tool calls into one block and appends new calls during playback', async () => {
+    vi.useFakeTimers()
+
+    const toolRunSession: ReplaySession = {
+      ...session,
+      turns: [
+        session.turns[0],
+        {
+          ...session.turns[1],
+          blocks: [
+            {
+              id: 'tool-run-1',
+              type: 'tool',
+              name: 'Read',
+              input: { file_path: 'src/App.tsx' },
+              output: 'first result',
+              status: 'completed',
+            },
+            {
+              id: 'tool-run-2',
+              type: 'tool',
+              name: 'Bash',
+              input: { command: 'echo ok' },
+              output: 'second result',
+              status: 'completed',
+            },
+          ],
+          summary: '2 tool calls',
+        },
+      ],
+    }
+
+    try {
+      const { container } = render(
+        <ReplayPanel
+          canExport
+          onExport={vi.fn()}
+          session={toolRunSession}
+          totalCount={2}
+          visibleCount={2}
+          onBookmarkChange={vi.fn()}
+          onOpenExportSettings={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onToggleTurnIncluded={vi.fn()}
+        />,
+      )
+
+      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
+      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('2 tool calls')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
+
+      expect(screen.queryByText('Tool: Read')).not.toBeInTheDocument()
+      expect(screen.queryByText('Tool: Bash')).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+
+      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(0)
+      expect(screen.queryByText('Tool: Read')).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+
+      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
+      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('Tool: Read')
+      expect(container.querySelectorAll('.replay-disclosure--tool')).toHaveLength(1)
+      expect(screen.queryByText('Tool: Bash')).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+
+      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
+      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('2 tool calls')
+      expect(container.querySelectorAll('.replay-disclosure--tool')).toHaveLength(2)
+      expect(screen.getByText('Tool: Bash')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

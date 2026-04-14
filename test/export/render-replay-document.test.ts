@@ -204,4 +204,39 @@ describe('renderReplayDocument', () => {
     expect(html).toContain('Read, Bash')
     expect(html).toContain('1 failed')
   })
+
+  it('groups short consecutive tool runs behind a shared disclosure', () => {
+    const session = createFixtureSession()
+    session.turns[2] = {
+      ...session.turns[2],
+      blocks: [
+        {
+          id: 'turn-3-tool-1',
+          type: 'tool',
+          name: 'Read',
+          status: 'completed',
+          input: { file_path: 'src/App.tsx' },
+          output: 'result-1',
+        },
+        {
+          id: 'turn-3-tool-2',
+          type: 'tool',
+          name: 'Bash',
+          status: 'completed',
+          input: { command: 'echo ok' },
+          output: 'result-2',
+        },
+      ],
+    }
+
+    const html = renderReplayDocument(session, {
+      includeThinking: false,
+      includeToolCalls: true,
+    })
+
+    expect(html).toContain('class="turn-tool-group" data-replay-kind="tool"')
+    expect(html).toContain('>2 tool calls<')
+    expect(html).toContain('Read, Bash')
+    expect(html).not.toContain('class="turn-tool-run"')
+  })
 })

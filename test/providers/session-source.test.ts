@@ -297,9 +297,14 @@ describe('createSessionSource', () => {
     const result = await sessionSource.loadSession({ sessionId: codexSession!.id })
     const assistantTurn = result.turns.find((turn) => turn.role === 'assistant')
 
-    expect(assistantTurn?.toolCalls?.[0]?.name).toBe('Bash')
-    expect(assistantTurn?.toolCalls?.[0]?.input).toContain('cd /tmp/codex-project && ls')
-    expect(assistantTurn?.toolCalls?.[0]?.output).toBe('file-a\nfile-b')
+    expect(assistantTurn?.blocks[1]).toMatchObject({
+      name: 'Bash',
+      output: 'file-a\nfile-b',
+      type: 'tool',
+    })
+    expect(assistantTurn?.blocks[1]).toMatchObject({
+      input: { command: 'cd /tmp/codex-project && ls' },
+    })
   })
 
   it('searches transcript content, not only metadata', async () => {

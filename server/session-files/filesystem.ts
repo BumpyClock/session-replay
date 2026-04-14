@@ -5,6 +5,7 @@ import { normalizePathForId } from "./path-utils.js";
 
 export interface JsonLineEntry<T = unknown> {
   line: number;
+  raw: string;
   value: T;
 }
 
@@ -33,6 +34,10 @@ export async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(await readTextFile(filePath)) as T;
 }
 
+/**
+ * Read newline-delimited JSON, skipping malformed lines and returning warnings
+ * instead of failing the whole readonly session load.
+ */
 export async function readJsonLines<T = unknown>(
   filePath: string,
 ): Promise<{ entries: JsonLineEntry<T>[]; warnings: SessionWarning[] }> {
@@ -46,11 +51,12 @@ export async function readJsonLines<T = unknown>(
       continue;
     }
 
-    try {
-      entries.push({
-        line: index + 1,
-        value: JSON.parse(trimmed) as T,
-      });
+      try {
+        entries.push({
+          line: index + 1,
+          raw: trimmed,
+          value: JSON.parse(trimmed) as T,
+        });
     } catch {
       warnings.push({
         code: "invalid_json_line",
@@ -64,6 +70,10 @@ export async function readJsonLines<T = unknown>(
   return { entries, warnings };
 }
 
+/**
+ * Recursively list matching files, returning sorted records with normalized
+ * relative paths plus basic file metadata for catalog fingerprints.
+ */
 export async function listFilesRecursive(
   rootPath: string,
   predicate: (filePath: string) => boolean,

@@ -28,6 +28,18 @@ function createFixtureSession(): NormalizedSession {
         role: 'turn',
         timestamp: '2026-04-12T10:00:00Z',
         userText: 'Inspect src/app.ts',
+        systemBlocks: [
+          {
+            id: 'turn-1-system',
+            kind: 'text',
+            text: '<turn_context>{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}</turn_context>',
+            timestamp: '2026-04-12T10:00:00Z',
+            sourceMeta: {
+              provider: 'codex',
+              filePath: '/tmp/session-1.jsonl',
+            },
+          },
+        ],
         assistantBlocks: [
           {
             id: 'turn-1-thinking',
@@ -79,15 +91,20 @@ describe('session materialization', () => {
 
     const replay = toMaterializedReplaySession(session)
 
-    expect(replay.turns).toHaveLength(2)
-    expect(replay.turns[0]?.role).toBe('user')
-    expect(replay.turns[1]?.role).toBe('assistant')
-    expect(replay.turns[1]?.blocks.map((block) => block.type)).toEqual([
+    expect(replay.turns).toHaveLength(3)
+    expect(replay.turns[0]?.role).toBe('system')
+    expect(replay.turns[1]?.role).toBe('user')
+    expect(replay.turns[2]?.role).toBe('assistant')
+    expect(replay.turns[2]?.blocks.map((block) => block.type)).toEqual([
       'thinking',
       'tool',
       'markdown',
     ])
-    expect(replay.turns[1]?.blocks[1]).toMatchObject({
+    expect(replay.turns[0]?.blocks[0]).toMatchObject({
+      text: '<turn_context>{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}</turn_context>',
+      type: 'markdown',
+    })
+    expect(replay.turns[2]?.blocks[1]).toMatchObject({
       input: { file_path: '/tmp/demo-project/src/app.ts' },
       name: 'Read',
       output: 'hello wrld',
@@ -100,13 +117,14 @@ describe('session materialization', () => {
 
     expect(summarizeNormalizedSession(session)).toBe('Inspect src/app.ts')
     expect(createSessionStats(session)).toEqual({
-      turnCount: 2,
+      turnCount: 3,
       userTurnCount: 1,
       assistantTurnCount: 1,
       toolCallCount: 1,
     })
     expect(toApiSessionRef(session.ref, session).summary).toBe('Inspect src/app.ts')
     expect(sessionMatchesQuery(session, 'hello wrld')).toBe(true)
+    expect(sessionMatchesQuery(session, 'danger-full-access')).toBe(true)
     expect(sessionMatchesQuery(session, 'missing phrase')).toBe(false)
   })
 })

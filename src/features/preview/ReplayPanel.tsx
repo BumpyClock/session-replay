@@ -12,6 +12,7 @@ import {
   Pause,
   Play,
   Settings2,
+  Sparkles,
   Wrench,
   UserRound,
 } from 'lucide-react'
@@ -34,7 +35,7 @@ import {
 } from '../../lib/replay/segments'
 import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../lib/replay/context-blocks'
 
-export type PreviewTurnRole = 'user' | 'assistant' | 'tool'
+export type PreviewTurnRole = 'user' | 'assistant' | 'system' | 'tool'
 
 /** Playback-ready turn shape used by the editor preview panel. */
 export type PreviewTurn = {
@@ -79,6 +80,7 @@ export type ReplayPanelProps = {
 const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
   user: UserRound,
   assistant: Bot,
+  system: Sparkles,
   tool: Wrench,
 }
 
@@ -645,34 +647,45 @@ function ReplaySegmentDisclosure({
   }
 
   const isOpen = expandedBlockIds.has(segment.id)
-  const summaryMeta = getReplayToolRunSummaryMeta(segment)
+  const visibleBlocks = getVisibleReplayToolRunBlocks(segment, playback)
+  if (visibleBlocks.length === 0) {
+    return null
+  }
+
+  const visibleSegment =
+    visibleBlocks.length === segment.blocks.length
+      ? segment
+      : {
+          ...segment,
+          blocks: visibleBlocks,
+        }
+  const summaryMeta = getReplayToolRunSummaryMeta(visibleSegment)
 
   return (
-    <ReplayPlaybackUnit playback={playback} unitId={segment.id}>
-      <details className="replay-tool-group" open={isOpen}>
-        <summary
-          className="replay-tool-group__summary"
-          onClick={(event) => {
-            event.preventDefault()
-            onToggle(segment.id)
-          }}
-        >
-          <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
-          <span className="replay-tool-group__label">{getReplayToolRunLabel(segment)}</span>
-          {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
-        </summary>
-        <div className="replay-tool-group__content">
-          {segment.blocks.map((block) => (
+    <details className="replay-tool-group" open={isOpen}>
+      <summary
+        className="replay-tool-group__summary"
+        onClick={(event) => {
+          event.preventDefault()
+          onToggle(segment.id)
+        }}
+      >
+        <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
+        <span className="replay-tool-group__label">{getReplayToolRunLabel(visibleSegment)}</span>
+        {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
+      </summary>
+      <div className="replay-tool-group__content">
+        {visibleBlocks.map((block) => (
+          <ReplayPlaybackUnit key={block.id} playback={playback} unitId={block.id}>
             <ReplayBlockDisclosure
-              key={block.id}
               block={block}
               isOpen={expandedBlockIds.has(block.id)}
               onToggle={() => onToggle(block.id)}
             />
-          ))}
-        </div>
-      </details>
-    </ReplayPlaybackUnit>
+          </ReplayPlaybackUnit>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -766,15 +779,6 @@ function getReplaySegmentPlaybackUnits(segment: ReplaySegment): PlaybackUnit[] {
       {
         delayMs: estimateReplayBlockDelay(segment.block),
         id: segment.block.id,
-      },
-    ]
-  }
-
-  if (shouldGroupReplayToolRun(segment)) {
-    return [
-      {
-        delayMs: clampDelay(260 + segment.blocks.length * 60),
-        id: segment.id,
       },
     ]
   }
@@ -907,6 +911,24 @@ function getActivePlaybackUnitId(
   }
 
   return null
+}
+
+function getVisibleReplayToolRunBlocks(
+  segment: Extract<ReplaySegment, { type: 'tool-run' }>,
+  playback:
+    | {
+        activeUnitId: string | null
+        animate: boolean
+        revealAll: boolean
+        visibleUnitIds: ReadonlySet<string>
+      }
+    | undefined,
+) {
+  if (!playback || playback.revealAll) {
+    return segment.blocks
+  }
+
+  return segment.blocks.filter((block) => playback.visibleUnitIds.has(block.id))
 }
 
 export { ReplayPanel }

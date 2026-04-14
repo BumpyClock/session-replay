@@ -2,8 +2,6 @@ import type { ReplayBlock, ReplayToolBlock } from '../api/contracts'
 import { getReplayBlockDefaultOpen, getReplayBlockLabel } from './blocks'
 import { expandReplayBlocks, type ReplayRenderableTextBlock } from './context-blocks'
 
-const TOOL_RUN_GROUP_THRESHOLD = 4
-
 export type ReplaySegment =
   | {
       id: string
@@ -77,7 +75,7 @@ export function getReplaySegmentDisclosureIds(segment: ReplaySegment): string[] 
 }
 
 export function shouldGroupReplayToolRun(segment: Extract<ReplaySegment, { type: 'tool-run' }>): boolean {
-  return segment.blocks.length > TOOL_RUN_GROUP_THRESHOLD
+  return segment.blocks.length > 1
 }
 
 export function getReplayToolRunLabel(segment: Extract<ReplaySegment, { type: 'tool-run' }>): string {

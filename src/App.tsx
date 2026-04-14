@@ -42,6 +42,10 @@ const roleForPreview = (role: ReplayRole): PreviewTurn['role'] => {
     return 'user'
   }
 
+  if (role === 'system') {
+    return 'system'
+  }
+
   if (role === 'tool') {
     return 'tool'
   }
@@ -501,33 +505,31 @@ function App() {
         </Sidebar>
 
         <SidebarInset className="app-main">
-          <main className="workspace-split workspace-split--single">
-            <section className="workspace-pane preview-pane">
-              <section className="preview-workspace">
+          <main className="preview-workspace app-main__preview">
+            {sessionLoading || sessionError || (!loadedSession && !sessionLoading) || (!sessionsLoading && !sessionsError && !sessions.length) ? (
+              <div className="toolbar-grid" aria-live="polite">
                 {sessionLoading ? <span className="toolbar-chip">Loading selected session…</span> : null}
                 {sessionError ? <span className="toolbar-chip">{sessionError}</span> : null}
-                {!loadedSession && !sessionLoading ? (
-                  <span className="toolbar-chip">Select session to begin</span>
-                ) : null}
+                {!loadedSession && !sessionLoading ? <span className="toolbar-chip">Select session to begin</span> : null}
                 {!sessionsLoading && !sessionsError && !sessions.length ? (
                   <span className="toolbar-chip">No sessions discovered</span>
                 ) : null}
-                <ReplayPanel
-                  canExport={canExport}
-                  isExporting={exporting}
-                  onExport={() => {
-                    void handleExport()
-                  }}
-                  session={replaySession}
-                  visibleCount={visibleTurnCount}
-                  totalCount={totalTurnCount}
-                  onBookmarkChange={handleBookmarkChange}
-                  onOpenExportSettings={() => setExportSettingsOpen(true)}
-                  onOpenPreview={() => setPreviewOpen(true)}
-                  onToggleTurnIncluded={toggleTurn}
-                />
-              </section>
-            </section>
+              </div>
+            ) : null}
+            <ReplayPanel
+              canExport={canExport}
+              isExporting={exporting}
+              onExport={() => {
+                void handleExport()
+              }}
+              session={replaySession}
+              visibleCount={visibleTurnCount}
+              totalCount={totalTurnCount}
+              onBookmarkChange={handleBookmarkChange}
+              onOpenExportSettings={() => setExportSettingsOpen(true)}
+              onOpenPreview={() => setPreviewOpen(true)}
+              onToggleTurnIncluded={toggleTurn}
+            />
           </main>
           <ExportPreviewDialog
             isOpen={previewOpen}

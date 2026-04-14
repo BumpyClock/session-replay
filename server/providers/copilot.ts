@@ -23,7 +23,6 @@ import {
   displayNameFromPath,
   finalizeTurns,
   pathProjectName,
-  stripTagContent,
   summarizeTurns,
   toolResultText,
 } from './shared.js'
@@ -35,12 +34,14 @@ interface CopilotEntry {
   type?: string
 }
 
+/** Scan ~/.copilot/session-state for persisted session event streams. */
 export async function scanCopilotSessions(homeDirectory: string): Promise<SessionFileRef[]> {
   const rootPath = join(homeDirectory, '.copilot', 'session-state')
   const files = await listFilesRecursive(rootPath, (filePath) => filePath.endsWith('events.jsonl'))
   return files.map((file) => createSessionFileRef('copilot', file))
 }
 
+/** Load one Copilot session and derive its searchable catalog entry. */
 export async function indexCopilotSession(
   file: Readonly<SessionFileRef>,
 ): Promise<IndexedSessionEntry> {
@@ -48,6 +49,10 @@ export async function indexCopilotSession(
   return createIndexedSessionEntry(file, session)
 }
 
+/**
+ * Rebuild one Copilot session from user/assistant/tool events and sibling
+ * workspace metadata such as workspace.yaml cwd.
+ */
 export async function loadCopilotSession(
   file: Readonly<SessionFileRef>,
 ): Promise<NormalizedSession> {
@@ -119,6 +124,7 @@ export async function loadCopilotSession(
   }
 }
 
+/** Catalog provider for Copilot session-state event logs. */
 export function createCopilotProvider(): SessionCatalogProvider {
   return {
     source: 'copilot',
@@ -152,9 +158,7 @@ function readCopilotContextCwd(data: Record<string, unknown> | undefined): strin
 function extractCopilotUserText(data: Record<string, unknown> | undefined): string {
   const transformed = typeof data?.transformedContent === 'string' ? data.transformedContent : ''
   if (transformed) {
-    const withoutDate = stripTagContent(transformed, 'current_datetime')
-    const withoutReminder = stripTagContent(withoutDate, 'reminder')
-    return withoutReminder.trim() || (typeof data?.content === 'string' ? data.content.trim() : '')
+    return transformed.trim() || (typeof data?.content === 'string' ? data.content.trim() : '')
   }
 
   return typeof data?.content === 'string' ? data.content.trim() : ''

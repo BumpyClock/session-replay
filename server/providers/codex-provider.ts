@@ -56,6 +56,7 @@ interface CodexParseContext {
   warnings: SessionWarning[]
 }
 
+/** Discover Codex session refs from the default ~/.codex session root. */
 export async function discoverCodexSessions(
   homeDirectory = resolveHomeDir(),
 ): Promise<readonly ApiSessionRef[]> {
@@ -63,6 +64,7 @@ export async function discoverCodexSessions(
   return refs.map((ref) => toCodexApiSessionRef(ref))
 }
 
+/** Load and materialize one Codex session by path or session id. */
 export async function loadCodexSession(
   request: SessionLoadRequest & { homeDirectory?: string },
 ): Promise<MaterializedReplaySession> {
@@ -71,6 +73,7 @@ export async function loadCodexSession(
   return toMaterializedReplaySession(session)
 }
 
+/** Search discovered Codex sessions using catalog metadata + transcript text. */
 export async function searchCodexSessions(
   homeDirectory: string,
   request: SessionSearchRequest,
@@ -79,6 +82,7 @@ export async function searchCodexSessions(
   return refs.map((ref) => toCodexApiSessionRef(ref))
 }
 
+/** Legacy-compatible Codex source adapter used by API/session-source callers. */
 export async function createSessionSource({ homeDirectory = resolveHomeDir() } = {}): Promise<{
   listSessions(): Promise<readonly ApiSessionRef[]>
   loadSession(request: SessionLoadRequest): Promise<MaterializedReplaySession>
@@ -113,6 +117,7 @@ function resolveHomeDir(): string {
   return homedir()
 }
 
+/** Primary catalog provider for Codex rollout JSONL sessions. */
 export function createSessionProvider(): SessionCatalogProvider {
   return {
     source: 'codex',
@@ -223,6 +228,7 @@ function parseLegacyCodexTurns(context: Readonly<CodexParseContext>): Normalized
   for (const entry of context.entries) {
     const type = entry.value?.type
     if (type === 'session_meta') {
+      turns.push(createCodexSystemTurn(context.file, turns.length, entry, 'session_meta'))
       continue
     }
 
@@ -232,6 +238,11 @@ function parseLegacyCodexTurns(context: Readonly<CodexParseContext>): Normalized
 
     if (type === 'event_msg') {
       const payloadType = typeof entry.value?.payload?.type === 'string' ? entry.value.payload.type : ''
+      if (payloadType === 'turn_context' || payloadType === 'turn_aborted' || payloadType === 'context_compacted') {
+        turns.push(createCodexSystemTurn(context.file, turns.length, entry, payloadType))
+        continue
+      }
+
       if (payloadType === 'task_started') {
         if (currentTurn && hasTurnContent(currentTurn)) {
           currentTurn = null
@@ -278,9 +289,21 @@ function parseLegacyCodexTurns(context: Readonly<CodexParseContext>): Normalized
 }
 
 function parseModernCodexTurns(context: Readonly<CodexParseContext>): NormalizedTurn[] {
-  const turn = createCodexTurn(context.file, 0, context.entries[0]?.value?.timestamp ?? null)
+  const turns: NormalizedTurn[] = []
+  const turn = createCodexTurn(context.file, turns.length, context.entries[0]?.value?.timestamp ?? null)
+  turns.push(turn)
 
   for (const entry of context.entries) {
+    if (entry.value?.type === 'session_meta') {
+      turns.unshift(createCodexSystemTurn(context.file, -1, entry, 'session_meta'))
+      continue
+    }
+
+    if (entry.value?.type === 'turn_context' || entry.value?.type === 'compacted') {
+      turns.push(createCodexSystemTurn(context.file, turns.length, entry, entry.value.type))
+      continue
+    }
+
     if (entry.value?.type !== 'item.completed') {
       continue
     }
@@ -308,6 +331,37 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
         .filter(Boolean)
         .join('\n\n')
       turn.userText = extractCodexUserText(text)
+      continue
+    }
+
+    if (itemType === 'message' && item.role === 'developer') {
+      const content = Array.isArray(item.content) ? item.content : []
+      const text = content
+        .map((part) => {
+          if (!part || typeof part !== 'object') {
+            return ''
+          }
+
+          return typeof (part as Record<string, unknown>).text === 'string'
+            ? String((part as Record<string, unknown>).text)
+            : ''
+        })
+        .filter(Boolean)
+        .join('\n\n')
+        || (typeof item.text === 'string' ? item.text : '')
+      const block = createTextBlock({
+        filePath: context.file.path,
+        id: `${turn.id}:system:${turn.systemBlocks.length}`,
+        kind: 'text',
+        provider: 'codex',
+        text,
+        timestamp: entry.value?.timestamp ?? null,
+        line: entry.line,
+        rawTypes: ['item.completed', itemType, 'developer'],
+      })
+      if (block) {
+        turn.systemBlocks.push(block)
+      }
       continue
     }
 
@@ -383,7 +437,7 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
   }
 
-  return [turn]
+  return turns
 }
 
 function createCodexTurn(
@@ -408,7 +462,7 @@ function inferCodexProjectName(file: Readonly<SessionFileRef>): string {
 }
 
 function hasTurnContent(turn: NormalizedTurn): boolean {
-  return Boolean(turn.userText || turn.assistantBlocks.length > 0)
+  return Boolean(turn.userText || turn.systemBlocks.length > 0 || turn.assistantBlocks.length > 0)
 }
 
 function readCodexCwd(payload: Record<string, unknown> | undefined): string | null {
@@ -428,6 +482,31 @@ function extractCodexUserText(message: string): string {
   return message.trim()
 }
 
+function createCodexSystemTurn(
+  file: Readonly<SessionFileRef>,
+  index: number,
+  entry: JsonLineEntry<CodexEntry>,
+  tagName: string,
+): NormalizedTurn {
+  const turn = createCodexTurn(file, index, entry.value?.timestamp ?? null)
+  appendTurnLine(turn, entry.line)
+  const block = createTextBlock({
+    filePath: file.path,
+    id: `${turn.id}:system:0`,
+    kind: 'text',
+    provider: 'codex',
+    text: `<${tagName}>${entry.raw}</${tagName}>`,
+    timestamp: entry.value?.timestamp ?? null,
+    line: entry.line,
+    rawTypes: [entry.value?.type ?? '', tagName],
+  })
+  if (block) {
+    turn.systemBlocks.push(block)
+  }
+
+  return turn
+}
+
 function appendLegacyCodexResponse(
   turn: NormalizedTurn,
   entry: JsonLineEntry<CodexEntry>,
@@ -435,6 +514,7 @@ function appendLegacyCodexResponse(
 ): void {
   const payload = entry.value?.payload
   const payloadType = typeof payload?.type === 'string' ? payload.type : ''
+  const role = typeof payload?.role === 'string' ? payload.role : ''
 
   if (payloadType === 'reasoning') {
     const encrypted = typeof payload?.encrypted_content === 'string' ? payload.encrypted_content : ''
@@ -447,6 +527,7 @@ function appendLegacyCodexResponse(
     const phase = typeof payload?.phase === 'string' ? payload.phase : 'final_answer'
     const content = Array.isArray(payload?.content) ? payload.content : []
     const kind = phase === 'commentary' ? 'thinking' : 'text'
+    const targetBlocks = role === 'developer' ? turn.systemBlocks : turn.assistantBlocks
 
     for (const item of content) {
       if (!item || typeof item !== 'object') {
@@ -460,18 +541,26 @@ function appendLegacyCodexResponse(
             ? String((item as Record<string, unknown>).output_text)
             : ''
 
+      if (role === 'user') {
+        const nextText = extractCodexUserText(text)
+        turn.userText = [turn.userText, nextText].filter(Boolean).join('\n\n').trim()
+        continue
+      }
+
       const block = createTextBlock({
         filePath,
-        id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
+        id: role === 'developer'
+          ? `${turn.id}:system:${turn.systemBlocks.length}`
+          : `${turn.id}:assistant:${turn.assistantBlocks.length}`,
         kind,
         provider: 'codex',
         text,
         timestamp: entry.value?.timestamp ?? null,
         line: entry.line,
-        rawTypes: [payloadType, phase],
+        rawTypes: [payloadType, phase, role || 'assistant'],
       })
       if (block) {
-        turn.assistantBlocks.push(block)
+        targetBlocks.push(block)
       }
     }
     return

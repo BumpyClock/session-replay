@@ -40,8 +40,8 @@ export interface SessionWarning {
 }
 
 /**
- * Assistant-authored block after normalization.
- * Text, thinking, and tool calls stay in source order for replay rendering.
+ * Replay-visible block captured from a normalized transcript turn.
+ * Used for assistant replies and synthetic system/runtime turns alike.
  */
 export interface SessionTextBlock extends SessionAssistantBlockBase {
   kind: SessionTextBlockKind;
@@ -81,8 +81,9 @@ export interface SessionRef {
 }
 
 /**
- * One user -> assistant exchange.
- * `role` fixed to `turn` to make transcript semantics explicit.
+ * One normalized transcript chunk.
+ * Conversation turns may include user text plus assistant blocks; runtime-only
+ * turns use `systemBlocks` when providers surface control-plane records.
  */
 export interface NormalizedTurn {
   id: string;
@@ -90,6 +91,7 @@ export interface NormalizedTurn {
   role: "turn";
   timestamp: string | null;
   userText: string;
+   systemBlocks: SessionAssistantBlock[];
   assistantBlocks: SessionAssistantBlock[];
   sourceMeta: SessionSourceMeta;
 }
@@ -121,11 +123,17 @@ export interface SessionFileRef {
   fingerprint: SessionFileFingerprint;
 }
 
+/**
+ * Lowercased searchable text split into metadata and transcript buckets.
+ */
 export interface SessionSearchDoc {
   metadataText: string;
   transcriptText: string;
 }
 
+/**
+ * Catalog row plus derived search/index metadata from a full session load.
+ */
 export interface IndexedSessionEntry {
   file: SessionFileRef;
   ref: SessionRef;
@@ -137,6 +145,9 @@ export interface SessionProviderScanOptions {
   homeDir: string;
 }
 
+/**
+ * Readonly provider adapter used by catalog discovery/index/load flows.
+ */
 export interface SessionCatalogProvider {
   readonly source: SessionSource;
   scan(options: SessionProviderScanOptions): Promise<SessionFileRef[]>;

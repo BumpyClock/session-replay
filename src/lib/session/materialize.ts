@@ -11,6 +11,7 @@ import type {
   SessionRef,
 } from "./contracts";
 
+/** Use the first user-authored turn as the list/header summary when available. */
 export function summarizeNormalizedSession(session: NormalizedSession): string | undefined {
   const firstUserTurn = session.turns.find((turn) => turn.userText.trim());
   return firstUserTurn ? truncateText(firstUserTurn.userText, 96) : undefined;
@@ -23,7 +24,8 @@ export function createSessionStats(session: NormalizedSession): SessionStats {
   const replayTurns = buildReplayTurns(session);
   const toolCallCount = session.turns.reduce(
     (count, turn) =>
-      count + turn.assistantBlocks.filter((block) => block.kind === "tool-call").length,
+      count +
+      [...turn.systemBlocks, ...turn.assistantBlocks].filter((block) => block.kind === "tool-call").length,
     0,
   );
 
@@ -35,6 +37,7 @@ export function createSessionStats(session: NormalizedSession): SessionStats {
   };
 }
 
+/** Materialize one catalog/session row with derived summary + stats. */
 export function toApiSessionRef(
   ref: SessionRef,
   session?: NormalizedSession,
@@ -56,6 +59,7 @@ export function toApiSessionRef(
   };
 }
 
+/** Expand normalized session turns into replay-ready user/system/assistant turns. */
 export function toMaterializedReplaySession(
   session: NormalizedSession,
 ): MaterializedReplaySession {
@@ -75,6 +79,7 @@ export function toMaterializedReplaySession(
   };
 }
 
+/** Search across metadata, user text, system blocks, assistant text, and tools. */
 export function sessionMatchesQuery(
   session: NormalizedSession,
   query: string,
@@ -94,7 +99,7 @@ export function sessionMatchesQuery(
     summarizeNormalizedSession(session),
     ...session.turns.map((turn) => turn.userText),
     ...session.turns.flatMap((turn) =>
-      turn.assistantBlocks.flatMap((block) =>
+      [...turn.systemBlocks, ...turn.assistantBlocks].flatMap((block) =>
         block.kind === "tool-call"
           ? [block.name, stringifyToolFragment(block.input), block.result ?? ""]
           : [block.text],
@@ -112,6 +117,20 @@ function buildReplayTurns(session: NormalizedSession): ReplayTurn[] {
   const replayTurns: ReplayTurn[] = [];
 
   for (const turn of session.turns) {
+    if (turn.systemBlocks.length > 0) {
+      replayTurns.push({
+        id: `${turn.id}:system`,
+        index: replayTurns.length,
+        role: "system",
+        timestamp:
+          turn.systemBlocks.find((block) => block.timestamp)?.timestamp ??
+          turn.timestamp ??
+          undefined,
+        included: true,
+        blocks: turn.systemBlocks.map(toReplayBlock),
+      });
+    }
+
     if (turn.userText.trim()) {
       replayTurns.push({
         id: `${turn.id}:user`,

@@ -47,6 +47,10 @@ export async function indexClaudeCodeSession(
   return createIndexedSessionEntry(file, session)
 }
 
+/**
+ * Load one Claude Code transcript, synthesizing system turns for top-level
+ * runtime records and merging user-side tool_result entries back into tools.
+ */
 export async function loadClaudeCodeSession(
   file: Readonly<SessionFileRef>,
 ): Promise<NormalizedSession> {
@@ -56,6 +60,12 @@ export async function loadClaudeCodeSession(
 
   for (const entry of entries) {
     const type = entry.value?.type
+    const systemTag = mapClaudeSystemTag(type)
+    if (systemTag) {
+      turns.push(createClaudeSystemTurn(file, turns.length, entry, systemTag))
+      continue
+    }
+
     if (type === 'user') {
       const userText = extractUserText(entry)
       const toolResults = extractToolResults(entry)
@@ -142,8 +152,66 @@ export function createSessionProvider(): SessionCatalogProvider {
   }
 }
 
+/** Legacy alias retained for callers that import the older provider name. */
 export function createClaudeCodeProvider(): SessionCatalogProvider {
   return createSessionProvider()
+}
+
+function mapClaudeSystemTag(type: string | undefined): string | null {
+  switch (type) {
+    case 'attachment':
+      return 'claude_attachment'
+    case 'progress':
+      return 'claude_progress'
+    case 'system':
+      return 'claude_system'
+    case 'queue-operation':
+      return 'queue_operation'
+    case 'permission-mode':
+      return 'permission_mode'
+    case 'file-history-snapshot':
+      return 'file_history_snapshot'
+    case 'agent-name':
+      return 'agent_name'
+    case 'custom-title':
+      return 'custom_title'
+    case 'pr-link':
+      return 'pr_link'
+    default:
+      return null
+  }
+}
+
+function createClaudeSystemTurn(
+  file: Readonly<SessionFileRef>,
+  index: number,
+  entry: JsonLineEntry<ClaudeEntry>,
+  tagName: string,
+): NormalizedTurn {
+  const turn = createTurn({
+    filePath: file.path,
+    id: `claude:${index}`,
+    index,
+    provider: 'claude-code',
+    timestamp: entry.value?.timestamp ?? null,
+    userText: '',
+  })
+  appendTurnLine(turn, entry.line)
+  const block = createTextBlock({
+    filePath: file.path,
+    id: `${turn.id}:system:0`,
+    kind: 'text',
+    provider: 'claude-code',
+    text: `<${tagName}>${entry.raw}</${tagName}>`,
+    timestamp: entry.value?.timestamp ?? null,
+    line: entry.line,
+    rawTypes: [entry.value?.type ?? '', tagName],
+  })
+  if (block) {
+    turn.systemBlocks.push(block)
+  }
+
+  return turn
 }
 
 function extractUserText(entry: JsonLineEntry<ClaudeEntry>): string {

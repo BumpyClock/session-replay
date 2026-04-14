@@ -90,9 +90,12 @@ describe('Claude provider', () => {
     expect(loaded.turns).toHaveLength(2)
     expect(loaded.turns[0]?.role).toBe('user')
     expect(loaded.turns[1]?.role).toBe('assistant')
-    expect(loaded.turns[1]?.blocks).toHaveLength(2)
-    expect(loaded.turns[1]?.toolCalls).toHaveLength(1)
-    expect(loaded.turns[1]?.toolCalls?.[0]?.name).toBe('bash')
-    expect(loaded.turns[1]?.toolCalls?.[0]?.output).toBe('clean')
+    expect(loaded.turns[1]?.blocks).toHaveLength(3)
+    expect(loaded.turns[1]?.blocks.map((block) => block.type)).toEqual(['thinking', 'markdown', 'tool'])
+    expect(loaded.turns[1]?.blocks[2]).toMatchObject({
+      name: 'bash',
+      output: 'clean',
+      type: 'tool',
+    })
   })
 })

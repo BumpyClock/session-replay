@@ -127,6 +127,12 @@ function renderReplayMetaBlockBodyHtml(block: ReplayMetaBlock): string {
           : `<p>${escapeHtml(block.body)}</p>`
       }</div>`
     : ''
+  const raw = shouldRenderReplayMetaRaw(block) && block.raw
+    ? `<details class="replay-meta-card__raw">
+      <summary>Raw transcript</summary>
+      <pre><code>${escapeHtml(block.raw)}</code></pre>
+    </details>`
+    : ''
 
   return `<div class="replay-meta-card replay-meta-card--${escapeHtml(block.kind)}">
     <div class="replay-meta-card__header">
@@ -135,5 +141,10 @@ function renderReplayMetaBlockBodyHtml(block: ReplayMetaBlock): string {
     </div>
     ${body}
     ${fields}
+    ${raw}
   </div>`
+}
+
+function shouldRenderReplayMetaRaw(block: ReplayMetaBlock): boolean {
+  return !['skill-context', 'invoked-skills', 'workspace-instructions'].includes(block.kind)
 }

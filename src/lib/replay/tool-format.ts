@@ -1,4 +1,9 @@
 import type { ReplayToolBlock } from '../api/contracts'
+import {
+  expandReplayTextBlock,
+  isReplayMetaBlock,
+  type ReplayMetaBlock,
+} from './context-blocks'
 
 export function formatReplayToolEditorText(block: ReplayToolBlock): string {
   const input = stringifyReplayToolValue(block.input)
@@ -55,6 +60,11 @@ export function formatReplayToolStatusLabel(block: ReplayToolBlock): string | nu
   return null
 }
 
+/**
+ * Render escaped HTML for one replay tool block, with richer diff/write views
+ * and structured meta-card output when a tool result is entirely control-plane
+ * scaffolding instead of normal stdout/stderr text.
+ */
 export function formatReplayToolBodyHtml(block: ReplayToolBlock): string {
   const normalizedName = block.name.trim().toLowerCase()
   const input = asObject(block.input)
@@ -92,9 +102,10 @@ export function formatReplayToolBodyHtml(block: ReplayToolBlock): string {
 
   if (outputText) {
     const outputClass = block.isError ? ' replay-toolcall-section--error' : ''
+    const renderedOutput = renderStructuredToolOutput(block.id, outputText)
     bodyHtml += `<div class="replay-toolcall-section${outputClass}">
       <div class="replay-toolcall-label">Result</div>
-      <pre><code>${escapeHtml(outputText)}</code></pre>
+      ${renderedOutput ?? `<pre><code>${escapeHtml(outputText)}</code></pre>`}
     </div>`
   }
 
@@ -190,9 +201,65 @@ function renderWriteBodyHtml({
 }
 
 function renderResultBlock(output: string, isError: boolean): string {
+  const renderedOutput = renderStructuredToolOutput('tool-result', output.trim())
+
   return `<div class="replay-tool-result${isError ? ' replay-tool-result--error' : ''}">
     <div class="replay-toolcall-label">Result</div>
-    <pre><code>${escapeHtml(output.trim())}</code></pre>
+    ${renderedOutput ?? `<pre><code>${escapeHtml(output.trim())}</code></pre>`}
+  </div>`
+}
+
+function renderStructuredToolOutput(id: string, output: string): string | null {
+  const blocks = expandReplayTextBlock({
+    id: `${id}:tool-output`,
+    type: 'text',
+    text: output,
+  })
+  const metaBlocks = blocks.filter(isReplayMetaBlock)
+
+  if (blocks.length === 0 || metaBlocks.length !== blocks.length) {
+    return null
+  }
+
+  return metaBlocks.map(renderToolMetaBlockHtml).join('')
+}
+
+function renderToolMetaBlockHtml(block: ReplayMetaBlock): string {
+  const chips = block.chips?.length
+    ? `<div class="replay-meta-card__chips">${block.chips
+        .map((chip) => `<span class="replay-meta-chip">${escapeHtml(chip)}</span>`)
+        .join('')}</div>`
+    : ''
+  const fields = block.fields?.length
+    ? `<dl class="replay-meta-card__fields">${block.fields
+        .map(
+          (field) =>
+            `<div class="replay-meta-card__field"><dt>${escapeHtml(field.label)}</dt><dd>${escapeHtml(field.value)}</dd></div>`,
+        )
+        .join('')}</dl>`
+    : ''
+  const body = block.body
+    ? `<div class="replay-meta-card__body">${
+        block.bodyFormat === 'markdown'
+          ? `<div class="replay-text-render">${escapeHtml(block.body)}</div>`
+          : `<p>${escapeHtml(block.body)}</p>`
+      }</div>`
+    : ''
+  const raw = block.raw
+    ? `<details class="replay-meta-card__raw">
+      <summary>Raw transcript</summary>
+      <pre><code>${escapeHtml(block.raw)}</code></pre>
+    </details>`
+    : ''
+
+  return `<div class="replay-meta-card replay-meta-card--${escapeHtml(block.kind)}">
+    <div class="replay-meta-card__header">
+      <div class="replay-meta-card__title">${escapeHtml(block.title)}</div>
+      ${chips}
+    </div>
+    ${body}
+    ${fields}
+    ${raw}
   </div>`
 }
 
