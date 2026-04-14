@@ -107,7 +107,13 @@ export function renderReplayDocument(
             <h2>Turns</h2>
             <div class="turn-list">
               ${replay.turns
-                .map((turn, turnIndex) => renderTurnListItem(turn, turnIndex === initialTurnIndex))
+                  .map((turn, turnIndex) =>
+                    renderTurnListItem(
+                      turn,
+                      turnIndex === initialTurnIndex,
+                      bookmarks.find((bookmark) => bookmark.turnIndex === turn.index),
+                    ),
+                  )
                 .join('')}
             </div>
           </section>
@@ -117,9 +123,16 @@ export function renderReplayDocument(
             replay.turns.length === 0
               ? '<div class="empty">No turns available in this export</div>'
               : replay.turns
-                  .map((turn, turnIndex) => renderTurnPanel(turn, turnIndex, turnIndex === initialTurnIndex))
+                  .map((turn, turnIndex) =>
+                    renderTurnPanel(
+                      turn,
+                      turnIndex,
+                      turnIndex === initialTurnIndex,
+                      bookmarks.find((bookmark) => bookmark.turnIndex === turn.index),
+                    ),
+                  )
                   .join('')
-          }
+           }
         </section>
       </main>
     </div>
@@ -227,23 +240,40 @@ function renderMetaRow(label: string, value?: string): string {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`
 }
 
-function renderTurnListItem(turn: ReplayTurn, active: boolean): string {
+function renderTurnListItem(
+  turn: ReplayTurn,
+  active: boolean,
+  bookmark?: { label: string },
+): string {
   const time = turn.timestamp
     ? `<span class="turn-time">${escapeHtml(turn.timestamp)}</span>`
     : ''
   const tone = getReplayTurnTone(turn)
+  const bookmarkBadge = bookmark ? '<span class="turn-item-bookmark">Bookmark</span>' : ''
 
   return `<button class="turn-item turn-item--${escapeHtml(tone)}${active ? ' is-active' : ''}" data-turn-index="${turn.index}" type="button">
     <span class="turn-role role-${escapeHtml(turn.role)}">${escapeHtml(turn.role)}</span>
     <span class="turn-label">${escapeHtml(summarizeReplayTurn(turn))}</span>
+    ${bookmarkBadge}
     ${time}
   </button>`
 }
 
-function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): string {
+function renderTurnPanel(
+  turn: ReplayTurn,
+  turnIndex: number,
+  active: boolean,
+  bookmark?: { label: string },
+): string {
   const summary = summarizeReplayTurn(turn)
   const time = turn.timestamp ? `<time class="turn-header-time">${escapeHtml(turn.timestamp)}</time>` : ''
   const tone = getReplayTurnTone(turn)
+  const bookmarkNote = bookmark
+    ? `<div class="turn-bookmark-note">
+        <span class="turn-bookmark-note__label">Bookmark</span>
+        <p class="turn-bookmark-note__text">${escapeHtml(bookmark.label)}</p>
+      </div>`
+    : ''
 
   return `<article class="turn-panel turn-panel--${escapeHtml(tone)}${active ? ' is-active' : ''}" data-turn-index="${turnIndex}" ${active ? '' : 'hidden'}>
     <header class="turn-header">
@@ -254,6 +284,7 @@ function renderTurnPanel(turn: ReplayTurn, turnIndex: number, active: boolean): 
         </div>
         ${time}
       </div>
+      ${bookmarkNote}
     </header>
     <div class="turn-body">${renderReplayTurnSegments(turn.blocks)}</div>
   </article>`
@@ -431,6 +462,19 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .bookmark { min-height: 44px; padding: 0 14px; text-align: left; }
 .turn-item { width: 100%; display: grid; gap: 6px; padding: 12px 14px; text-align: left; }
 .turn-item.is-active, .turn-panel.is-active { border-color: rgba(35, 131, 226, 0.26); background: rgba(255,255,255,0.97); }
+.turn-item-bookmark {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(35, 131, 226, 0.08);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
 .turn-item--thinking, .turn-panel--thinking { border-left: 3px solid rgba(224, 115, 40, 0.55); }
 .turn-item--tool, .turn-panel--tool { border-left: 3px solid rgba(35, 131, 226, 0.55); }
 .turn-role { display: inline-flex; width: fit-content; align-items: center; justify-content: center; min-height: 24px; padding: 0 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; text-transform: capitalize; }
@@ -447,6 +491,22 @@ pre, code { white-space: pre-wrap; word-break: break-word; }
 .turn-header-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .turn-header-summary, .turn-header-time { color: var(--text-muted); font-size: 0.82rem; }
 .turn-header-summary { margin-left: auto; text-align: right; }
+.turn-bookmark-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 131, 226, 0.14);
+  border-radius: var(--radius-sm);
+  background: rgba(35, 131, 226, 0.08);
+}
+.turn-bookmark-note__label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.turn-bookmark-note__text { margin: 0; color: var(--text); }
 .turn-body { display: grid; gap: 12px; }
 .turn-block { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-solid); overflow: hidden; }
 .turn-block-summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; font-weight: 600; }

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Clock, MessageSquare, Wrench, UserRound } from 'lucide-react'
+import { Bookmark, Bot, ChevronDown, Clock, Eye, EyeOff, MessageSquare, Wrench, UserRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReplayBlock } from '../../lib/api/contracts'
 import { renderReplayBlockBodyHtml } from '../../lib/markdown'
@@ -22,12 +22,14 @@ export type PreviewTurnRole = 'user' | 'assistant' | 'tool'
 
 export type PreviewTurn = {
   blocks: ReplayBlock[]
+  bookmarkLabel?: string
   id: string
   role: PreviewTurnRole
   summary: string
   timestamp: string
   isHidden?: boolean
   isBookmarked?: boolean
+  previewText?: string
   timeLabel: string
 }
 
@@ -46,20 +48,32 @@ export type ReplayPanelProps = {
   session: ReplaySession | null
   visibleCount: number
   totalCount: number
+  onBookmarkChange?: (turnId: string, nextLabel: string) => void
+  onToggleTurnIncluded?: (turnId: string) => void
 }
 
 const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
   user: UserRound,
-  assistant: Check,
+  assistant: Bot,
   tool: Wrench,
 }
 
-function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
+function ReplayPanel({
+  session,
+  visibleCount,
+  totalCount,
+  onBookmarkChange,
+  onToggleTurnIncluded,
+}: ReplayPanelProps) {
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(new Set())
+  const [editingNoteTurnId, setEditingNoteTurnId] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
 
   useEffect(() => {
     if (!session) {
       setExpandedBlockIds(new Set())
+      setEditingNoteTurnId(null)
+      setNoteDraft('')
       return
     }
 
@@ -73,6 +87,21 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
       ),
     )
   }, [session?.id])
+
+  useEffect(() => {
+    if (!editingNoteTurnId || !session) {
+      return
+    }
+
+    const currentTurn = session.turns.find((turn) => turn.id === editingNoteTurnId)
+    if (!currentTurn) {
+      setEditingNoteTurnId(null)
+      setNoteDraft('')
+      return
+    }
+
+    setNoteDraft(currentTurn.bookmarkLabel ?? '')
+  }, [editingNoteTurnId, session])
 
   const expandAll = () => {
     if (!session) {
@@ -102,6 +131,26 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
       }
       return next
     })
+  }
+
+  const openNoteEditor = (turn: PreviewTurn) => {
+    setEditingNoteTurnId(turn.id)
+    setNoteDraft(turn.bookmarkLabel ?? '')
+  }
+
+  const closeNoteEditor = () => {
+    setEditingNoteTurnId(null)
+    setNoteDraft('')
+  }
+
+  const commitNoteEditor = () => {
+    if (!editingNoteTurnId || !onBookmarkChange) {
+      closeNoteEditor()
+      return
+    }
+
+    onBookmarkChange(editingNoteTurnId, noteDraft)
+    closeNoteEditor()
   }
 
   return (
@@ -155,19 +204,77 @@ function ReplayPanel({ session, visibleCount, totalCount }: ReplayPanelProps) {
                       <div className="replay-turn__top">
                         <span className="replay-turn__role-label">{formatPreviewRoleLabel(turn.role)}</span>
                         <span className="replay-turn__summary-inline">{turn.summary}</span>
+                        <div className="replay-turn__controls">
+                          <button
+                            aria-label={turn.bookmarkLabel ? 'Edit bookmark note' : 'Add bookmark note'}
+                            className={`replay-turn__icon-button ${turn.isBookmarked ? 'is-active' : ''}`}
+                            type="button"
+                            onClick={() => openNoteEditor(turn)}
+                          >
+                            <Bookmark size={14} strokeWidth={1.8} />
+                          </button>
+                          <button
+                            aria-label={turn.isHidden ? 'Show turn in preview and export' : 'Hide turn from preview and export'}
+                            className={`replay-turn__icon-button ${turn.isHidden ? 'is-active' : ''}`}
+                            type="button"
+                            onClick={() => onToggleTurnIncluded?.(turn.id)}
+                          >
+                            {turn.isHidden ? <Eye size={14} strokeWidth={1.8} /> : <EyeOff size={14} strokeWidth={1.8} />}
+                          </button>
+                        </div>
                       </div>
                       {turn.timeLabel ? <p className="replay-turn__timestamp">{turn.timeLabel}</p> : null}
+                      {editingNoteTurnId === turn.id ? (
+                        <div className="replay-turn__note-editor">
+                          <input
+                            aria-label={`Bookmark note for ${turn.id}`}
+                            autoFocus
+                            className="replay-turn__note-input"
+                            placeholder="Add note for export bookmark"
+                            value={noteDraft}
+                            onBlur={commitNoteEditor}
+                            onChange={(event) => setNoteDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                commitNoteEditor()
+                              }
+
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                closeNoteEditor()
+                              }
+                            }}
+                          />
+                        </div>
+                      ) : turn.bookmarkLabel ? (
+                        <button
+                          className="replay-turn__note-pill"
+                          type="button"
+                          onClick={() => openNoteEditor(turn)}
+                        >
+                          <Bookmark size={12} strokeWidth={1.8} />
+                          {turn.bookmarkLabel}
+                        </button>
+                      ) : null}
                     </div>
-                    <div className="replay-turn__body">
-                      {createReplaySegments(turn.blocks).map((segment) => (
-                        <ReplaySegmentDisclosure
-                          key={segment.id}
-                          expandedBlockIds={expandedBlockIds}
-                          segment={segment}
-                          onToggle={toggleBlock}
-                        />
-                      ))}
-                    </div>
+                    {turn.isHidden ? (
+                      <div className="replay-turn__collapsed-preview">
+                        <span className="replay-turn__collapsed-label">Hidden from preview + export</span>
+                        <p className="replay-turn__collapsed-text">{turn.previewText ?? turn.summary}</p>
+                      </div>
+                    ) : (
+                      <div className="replay-turn__body">
+                        {createReplaySegments(turn.blocks).map((segment) => (
+                          <ReplaySegmentDisclosure
+                            key={segment.id}
+                            expandedBlockIds={expandedBlockIds}
+                            segment={segment}
+                            onToggle={toggleBlock}
+                          />
+                        ))}
+                      </div>
+                    )}
                     {turn.isBookmarked ? <span className="replay-turn__bookmark">bookmarked</span> : null}
                   </div>
                 </li>

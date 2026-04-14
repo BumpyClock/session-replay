@@ -126,6 +126,8 @@ describe('renderReplayDocument', () => {
     expect(hiddenThinkingHtml).toContain('data-action="collapse-all"')
     expect(hiddenThinkingHtml).toContain('completed · src/App.tsx')
     expect(hiddenThinkingHtml).toContain('turn-panel turn-panel--tool')
+    expect(hiddenThinkingHtml).toContain('turn-bookmark-note')
+    expect(hiddenThinkingHtml).toContain('Answer')
 
     const revealedThinkingHtml = renderReplayDocument(createFixtureSession(), {
       includeThinking: true,
@@ -141,6 +143,7 @@ describe('renderReplayDocument', () => {
     expect(revealedThinkingHtml).toContain('Skill context')
     expect(revealedThinkingHtml).toContain('ux-designer')
     expect(revealedThinkingHtml).not.toContain('&lt;skill-context')
+    expect(revealedThinkingHtml).toContain('turn-item-bookmark')
   })
 
   it('filters tool blocks when export disables tool call rendering', () => {

@@ -146,6 +146,35 @@ export function summarizeReplayTurn(turn: ReplayTurn): string {
   return truncateText(firstTextBlock.text.trim(), 56)
 }
 
+export function getReplayTurnPreviewText(blocks: readonly ReplayRenderableBlock[]): string {
+  for (const block of blocks) {
+    if (isReplayMetaBlock(block)) {
+      return summarizeReplayMetaBlock(block)
+    }
+
+    if (isReplayToolBlock(block)) {
+      return getReplayBlockSummaryMeta(block) ?? getReplayBlockLabel(block)
+    }
+
+    if (block.type === 'thinking') {
+      continue
+    }
+
+    const text = truncateInlineText(block.text, 88)
+    if (text) {
+      return text
+    }
+  }
+
+  for (const block of blocks) {
+    if (isReplayTextBlock(block) && !isReplayMetaBlock(block) && block.type === 'thinking') {
+      return truncateInlineText(block.text, 88) ?? 'Thinking block'
+    }
+  }
+
+  return summarizeReplayBlocks(blocks)
+}
+
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value

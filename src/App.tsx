@@ -1,4 +1,4 @@
-import { BookmarkPlus, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserPanel, type SessionSummary } from './features/browser/BrowserPanel'
 import { ReplayPanel } from './features/preview/ReplayPanel'
@@ -18,9 +18,9 @@ import type {
   SessionRef,
 } from './lib/api/contracts'
 import type { SessionWarning } from './lib/session'
-import { summarizeReplayTurn } from './lib/replay/blocks'
+import { getReplayTurnPreviewText, summarizeReplayTurn } from './lib/replay/blocks'
+import { expandReplayBlocks } from './lib/replay/context-blocks'
 import { formatReplayToolEditorText } from './lib/replay/tool-format'
-import { Button } from './components/ui/button'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
 const providerLabelMap: Record<string, string> = {
@@ -79,13 +79,16 @@ function makeReplaySession(
 ): ReplaySession {
   const turns: PreviewTurn[] = session.turns.map((turn) => {
     const isHidden = turn.included === false
+    const bookmarkLabel = draft?.bookmarks[turn.id]?.label
 
     return {
       blocks: turn.blocks,
+      bookmarkLabel,
       id: turn.id,
       role: roleForPreview(turn.role),
-      isBookmarked: Boolean(draft?.bookmarks[turn.id]),
+      isBookmarked: Boolean(bookmarkLabel),
       isHidden,
+      previewText: getReplayTurnPreviewText(expandReplayBlocks(turn.blocks)),
       summary: summarizeReplayTurn(turn),
       timestamp: turn.timestamp ?? '',
       timeLabel: formatTimeLabel(turn.timestamp),
@@ -507,8 +510,8 @@ function App() {
               <section className="editor-shell">
                 <header className="workspace-header">
                   <div className="workspace-header__copy">
-                    <p className="eyebrow">Turn selection</p>
-                    <h2>Session workspace</h2>
+                    <p className="eyebrow">Transcript draft</p>
+                    <h2>Session edits</h2>
                   </div>
                   <div className="toolbar-grid">
                     {sessionLoading ? <span className="toolbar-chip">Loading selected session…</span> : null}
@@ -516,6 +519,7 @@ function App() {
                     {!loadedSession && !sessionLoading ? (
                       <span className="toolbar-chip">Select session to begin</span>
                     ) : null}
+                    {loadedSession ? <span className="toolbar-chip">Hide + bookmark now live in session playback</span> : null}
                     {!sessionsLoading && !sessionsError && !sessions.length ? (
                       <span className="toolbar-chip">No sessions discovered</span>
                     ) : null}
@@ -578,30 +582,6 @@ function App() {
                                 )
                               })}
                             </div>
-                            <div className="turn-strip__actions">
-                              <Button size="xs" onClick={() => toggleTurn(turn.id)}>
-                                {turn.included === false ? (
-                                  <>
-                                    <Eye size={12} strokeWidth={1.8} />
-                                    Show
-                                  </>
-                                ) : (
-                                  <>
-                                    <EyeOff size={12} strokeWidth={1.8} />
-                                    Hide
-                                  </>
-                                )}
-                              </Button>
-                              <label className="turn-strip__bookmark">
-                                <BookmarkPlus size={12} strokeWidth={1.8} />
-                                <input
-                                  aria-label={`Bookmark ${turn.id}`}
-                                  value={loadedDraft?.bookmarks?.[turn.id]?.label ?? ''}
-                                  onChange={(event) => handleBookmarkChange(turn.id, event.target.value)}
-                                  placeholder="Bookmark"
-                                />
-                              </label>
-                            </div>
                           </li>
                         ))
                       ) : (
@@ -625,6 +605,8 @@ function App() {
                   session={replaySession}
                   visibleCount={visibleTurnCount}
                   totalCount={totalTurnCount}
+                  onBookmarkChange={handleBookmarkChange}
+                  onToggleTurnIncluded={toggleTurn}
                 />
 
                 {previewError ? (
