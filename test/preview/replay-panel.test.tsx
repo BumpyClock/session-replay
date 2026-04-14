@@ -1,5 +1,6 @@
 import React from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReplayPanel, type ReplaySession } from '../../src/features/preview/ReplayPanel'
 
@@ -97,13 +98,20 @@ const session: ReplaySession = {
 describe('ReplayPanel', () => {
   it('renders markdown html inside session playback cards', () => {
     const onBookmarkChange = vi.fn()
+    const onExport = vi.fn()
+    const onOpenExportSettings = vi.fn()
+    const onOpenPreview = vi.fn()
     const onToggleTurnIncluded = vi.fn()
     const { container } = render(
       <ReplayPanel
+        canExport
+        onExport={onExport}
         session={session}
         totalCount={3}
         visibleCount={2}
         onBookmarkChange={onBookmarkChange}
+        onOpenExportSettings={onOpenExportSettings}
+        onOpenPreview={onOpenPreview}
         onToggleTurnIncluded={onToggleTurnIncluded}
       />,
     )
@@ -118,8 +126,16 @@ describe('ReplayPanel', () => {
     expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()
     expect(screen.getByText('1 text, 1 thinking, 1 tool call')).toBeInTheDocument()
     expect(screen.getByText('07:04 AM')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Expand all' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collapse all' })).toBeInTheDocument()
+    const toolbar = screen.getByRole('toolbar', { name: 'Playback controls' })
+    expect(within(toolbar).getByRole('button', { name: 'Play transcript' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Previous step' })).toBeDisabled()
+    expect(within(toolbar).getByRole('button', { name: 'Next step' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Playback speed 4x' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Open export settings' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Preview' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Export' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand all' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Collapse all' })).not.toBeInTheDocument()
     expect(screen.getByText('completed · src/App.tsx')).toBeInTheDocument()
 
     const details = container.querySelectorAll('details')
@@ -127,11 +143,14 @@ describe('ReplayPanel', () => {
     expect(details[1]).not.toHaveAttribute('open')
     expect(details[2]).not.toHaveAttribute('open')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }))
-    details.forEach((detail) => expect(detail).not.toHaveAttribute('open'))
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Open export settings' }))
+    expect(onOpenExportSettings).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }))
-    details.forEach((detail) => expect(detail).toHaveAttribute('open'))
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Preview' }))
+    expect(onOpenPreview).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Export' }))
+    expect(onExport).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit bookmark note' })[0])
     const noteInput = screen.getByLabelText('Bookmark note for turn-1')
@@ -141,5 +160,48 @@ describe('ReplayPanel', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Hide turn from preview and export' })[0])
     expect(onToggleTurnIncluded).toHaveBeenCalledWith('turn-0')
+  })
+
+  it('reveals assistant content progressively while playback runs', async () => {
+    vi.useFakeTimers()
+
+    try {
+      render(
+        <ReplayPanel
+          canExport
+          onExport={vi.fn()}
+          session={session}
+          totalCount={3}
+          visibleCount={2}
+          onBookmarkChange={vi.fn()}
+          onOpenExportSettings={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onToggleTurnIncluded={vi.fn()}
+        />,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
+
+      expect(screen.getByRole('button', { name: 'Pause playback' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Previous step' })).toBeDisabled()
+      expect(screen.queryByRole('heading', { level: 2, name: 'Heading' })).not.toBeInTheDocument()
+      expect(screen.queryByText('completed · src/App.tsx')).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+
+      expect(screen.getByRole('button', { name: 'Previous step' })).toBeEnabled()
+      expect(screen.queryByRole('heading', { level: 2, name: 'Heading' })).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+
+      expect(screen.getByRole('heading', { level: 2, name: 'Heading' })).toBeInTheDocument()
+      expect(screen.queryByText('completed · src/App.tsx')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -7,7 +7,7 @@ This repository ships a Vite + React 19 editor with a local API server in the sa
 ## Scripts
 
 - `bun run dev`, `bun run vite`, `bun run dev:app`: starts Vite on `http://127.0.0.1:5173` and auto-starts local API on `http://127.0.0.1:4848` when needed.
-- `bun run dev:server`: starts API server only on `http://127.0.0.1:4848`.
+- `bun run dev:server`: starts API server only on `http://127.0.0.1:4848` in Bun watch mode, so server file changes restart it automatically.
 - `bun run build`: runs app build.
 - `bun run build:app`: build frontend bundle only.
 - `bun run build:server`: app-level wrapper for future Bun server entry `server/index.ts`.

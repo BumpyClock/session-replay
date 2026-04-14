@@ -1,5 +1,21 @@
-import { Bookmark, Bot, ChevronDown, Clock, Eye, EyeOff, MessageSquare, Wrench, UserRound } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  Bookmark,
+  Bot,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Download,
+  Eye,
+  EyeOff,
+  MessageSquare,
+  Pause,
+  Play,
+  Settings2,
+  Wrench,
+  UserRound,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReplayBlock } from '../../lib/api/contracts'
 import { renderReplayBlockBodyHtml } from '../../lib/markdown'
 import {
@@ -20,6 +36,7 @@ import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../.
 
 export type PreviewTurnRole = 'user' | 'assistant' | 'tool'
 
+/** Playback-ready turn shape used by the editor preview panel. */
 export type PreviewTurn = {
   blocks: ReplayBlock[]
   bookmarkLabel?: string
@@ -33,6 +50,7 @@ export type PreviewTurn = {
   timeLabel: string
 }
 
+/** Session payload rendered inside the playback transcript panel. */
 export type ReplaySession = {
   id: string
   provider: string
@@ -44,11 +62,17 @@ export type ReplaySession = {
   turns: PreviewTurn[]
 }
 
+/** Toolbar actions plus replay data needed by the playback transcript view. */
 export type ReplayPanelProps = {
+  canExport?: boolean
+  isExporting?: boolean
+  onExport?: () => void
   session: ReplaySession | null
   visibleCount: number
   totalCount: number
   onBookmarkChange?: (turnId: string, nextLabel: string) => void
+  onOpenExportSettings?: () => void
+  onOpenPreview?: () => void
   onToggleTurnIncluded?: (turnId: string) => void
 }
 
@@ -58,22 +82,56 @@ const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
   tool: Wrench,
 }
 
+const PLAYBACK_SPEEDS = [1, 2, 4, 8] as const
+const DEFAULT_PLAYBACK_SPEED = 4
+const PLAYBACK_TURN_DWELL_MS = 420
+
+type PlaybackMode = 'idle' | 'paused' | 'playing'
+
+type PlaybackUnit = {
+  delayMs: number
+  id: string
+}
+
+type PlaybackTurnPlan = {
+  role: PreviewTurnRole
+  turnId: string
+  units: PlaybackUnit[]
+}
+
 function ReplayPanel({
+  canExport,
+  isExporting,
+  onExport,
   session,
   visibleCount,
   totalCount,
   onBookmarkChange,
+  onOpenExportSettings,
+  onOpenPreview,
   onToggleTurnIncluded,
 }: ReplayPanelProps) {
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(new Set())
   const [editingNoteTurnId, setEditingNoteTurnId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle')
+  const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(() => {
+    const defaultIndex = PLAYBACK_SPEEDS.indexOf(DEFAULT_PLAYBACK_SPEED)
+    return defaultIndex >= 0 ? defaultIndex : 0
+  })
+  const [playbackTurnIndex, setPlaybackTurnIndex] = useState(0)
+  const [revealedUnitIds, setRevealedUnitIds] = useState<Set<string>>(new Set())
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const turnRefs = useRef<Record<string, HTMLLIElement | null>>({})
 
   useEffect(() => {
     if (!session) {
       setExpandedBlockIds(new Set())
       setEditingNoteTurnId(null)
       setNoteDraft('')
+      setPlaybackMode('idle')
+      setPlaybackTurnIndex(0)
+      setRevealedUnitIds(new Set())
       return
     }
 
@@ -87,6 +145,37 @@ function ReplayPanel({
       ),
     )
   }, [session?.id])
+
+  const playbackTurns = useMemo(
+    () =>
+      session?.turns
+        .filter((turn) => !turn.isHidden)
+        .map((turn) => ({
+          role: turn.role,
+          turnId: turn.id,
+          // User turns stay instantaneous; only assistant/tool output replays in paced steps.
+          units: turn.role === 'user' ? [] : createReplaySegments(turn.blocks).flatMap(getReplaySegmentPlaybackUnits),
+        })) ?? [],
+    [session],
+  )
+  const playbackTurnIndexById = useMemo(
+    () => new Map(playbackTurns.map((turn, index) => [turn.turnId, index])),
+    [playbackTurns],
+  )
+  const playbackSpeed = PLAYBACK_SPEEDS[playbackSpeedIndex] ?? DEFAULT_PLAYBACK_SPEED
+  const activePlaybackTurn = playbackTurns[playbackTurnIndex]
+  const activePlaybackUnitId = useMemo(
+    () => getActivePlaybackUnitId(activePlaybackTurn, revealedUnitIds),
+    [activePlaybackTurn, revealedUnitIds],
+  )
+  const playbackStarted = playbackMode !== 'idle'
+  const playbackComplete =
+    playbackTurns.length > 0
+    && playbackTurnIndex >= playbackTurns.length - 1
+    && playbackTurns.every((turn) => turn.units.every((unit) => revealedUnitIds.has(unit.id)))
+  const playbackCanStepBackward = playbackTurns.length > 0 && Boolean(
+    playbackTurnIndex > 0 || activePlaybackTurn?.units.some((unit) => revealedUnitIds.has(unit.id)),
+  )
 
   useEffect(() => {
     if (!editingNoteTurnId || !session) {
@@ -102,24 +191,6 @@ function ReplayPanel({
 
     setNoteDraft(currentTurn.bookmarkLabel ?? '')
   }, [editingNoteTurnId, session])
-
-  const expandAll = () => {
-    if (!session) {
-      return
-    }
-
-    setExpandedBlockIds(
-      new Set(
-        session.turns.flatMap((turn) =>
-          createReplaySegments(turn.blocks).flatMap((segment) => getReplaySegmentDisclosureIds(segment)),
-        ),
-      ),
-    )
-  }
-
-  const collapseAll = () => {
-    setExpandedBlockIds(new Set())
-  }
 
   const toggleBlock = (blockId: string) => {
     setExpandedBlockIds((current) => {
@@ -149,9 +220,111 @@ function ReplayPanel({
       return
     }
 
+    // Note edits commit on blur/Enter so hover-driven controls stay lightweight.
     onBookmarkChange(editingNoteTurnId, noteDraft)
     closeNoteEditor()
   }
+
+  const resetPlayback = () => {
+    setPlaybackTurnIndex(0)
+    setRevealedUnitIds(new Set())
+  }
+
+  const stepPlaybackForward = () => {
+    const nextState = getNextPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
+    if (!nextState) {
+      setPlaybackMode('paused')
+      return
+    }
+
+    setPlaybackTurnIndex(nextState.turnIndex)
+    setRevealedUnitIds(nextState.revealedUnitIds)
+  }
+
+  const stepPlaybackBackward = () => {
+    const previousState = getPreviousPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
+    if (!previousState) {
+      resetPlayback()
+      return
+    }
+
+    setPlaybackTurnIndex(previousState.turnIndex)
+    setRevealedUnitIds(previousState.revealedUnitIds)
+  }
+
+  useEffect(() => {
+    if (playbackMode !== 'playing') {
+      return
+    }
+
+    const delayMs = getNextPlaybackDelay(playbackTurns, playbackTurnIndex, revealedUnitIds, playbackSpeed)
+    if (delayMs === null) {
+      setPlaybackMode('paused')
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      stepPlaybackForward()
+    }, delayMs)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [playbackMode, playbackSpeed, playbackTurnIndex, playbackTurns, revealedUnitIds])
+
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || !session) {
+      return
+    }
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      if (typeof content.scrollTo === 'function') {
+        content.scrollTo({
+          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
+          top: content.scrollHeight,
+        })
+        return
+      }
+
+      content.scrollTop = content.scrollHeight
+    })
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+    }
+  }, [activePlaybackUnitId, playbackMode, playbackStarted, playbackTurnIndex, revealedUnitIds, session?.id])
+
+  useEffect(() => {
+    if (!playbackStarted) {
+      return
+    }
+
+    const currentTurnId = playbackTurns[playbackTurnIndex]?.turnId
+    if (!currentTurnId) {
+      return
+    }
+
+    const target = turnRefs.current[currentTurnId]
+    if (!target) {
+      return
+    }
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      if (typeof target.scrollIntoView !== 'function') {
+        return
+      }
+
+      target.scrollIntoView({
+        behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
+        block: 'end',
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+    }
+  }, [activePlaybackUnitId, playbackMode, playbackStarted, playbackTurnIndex, playbackTurns])
 
   return (
     <section className="preview-block" aria-live="polite">
@@ -165,20 +338,10 @@ function ReplayPanel({
             <Clock size={14} strokeWidth={1.8} />
             {visibleCount}/{totalCount} visible
           </div>
-          {session ? (
-            <div className="preview-block__controls">
-              <button className="preview-block__action" type="button" onClick={expandAll}>
-                Expand all
-              </button>
-              <button className="preview-block__action" type="button" onClick={collapseAll}>
-                Collapse all
-              </button>
-            </div>
-          ) : null}
         </div>
       </header>
 
-      <div className="preview-block__content">
+      <div ref={contentRef} className="preview-block__content preview-block__content--chat">
         {!session ? (
           <div className="preview-block__empty">
             <p>No session selected.</p>
@@ -187,14 +350,42 @@ function ReplayPanel({
             </p>
           </div>
         ) : (
-          <ul>
+          <ul className="preview-block__transcript">
             {session.turns.map((turn) => {
+              if (playbackStarted && turn.isHidden) {
+                return null
+              }
+
+              const playbackIndex = playbackTurnIndexById.get(turn.id)
+              if (playbackStarted && playbackIndex !== undefined && playbackIndex > playbackTurnIndex) {
+                return null
+              }
+
               const Icon = roleIconMap[turn.role]
               const turnTone = getReplayTurnTone(turn)
+              const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < playbackTurnIndex
+              const isPlaybackActive = playbackStarted && playbackIndex === playbackTurnIndex
+              const playbackTurn = playbackIndex === undefined ? undefined : playbackTurns[playbackIndex]
+              const turnVisibleUnitIds =
+                !playbackStarted || playbackTurn === undefined || isPlaybackPast || (isPlaybackActive && turn.role === 'user')
+                  ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
+                  : isPlaybackActive
+                    ? revealedUnitIds
+                    : new Set<string>()
+
               return (
                 <li
                   key={turn.id}
-                  className={`replay-turn replay-turn--${turnTone} ${turn.isHidden ? 'is-hidden' : ''}`}
+                  ref={(node) => {
+                    turnRefs.current[turn.id] = node
+                  }}
+                  className={[
+                    'replay-turn',
+                    `replay-turn--${turnTone}`,
+                    turn.isHidden ? 'is-hidden' : '',
+                    isPlaybackPast ? 'is-playback-past' : '',
+                    isPlaybackActive ? 'is-playback-active' : '',
+                  ].filter(Boolean).join(' ')}
                 >
                   <div className="replay-turn__icon">
                     <Icon size={12} strokeWidth={1.8} />
@@ -269,6 +460,16 @@ function ReplayPanel({
                           <ReplaySegmentDisclosure
                             key={segment.id}
                             expandedBlockIds={expandedBlockIds}
+                            playback={
+                              playbackStarted && playbackIndex !== undefined
+                                ? {
+                                    activeUnitId: isPlaybackActive ? activePlaybackUnitId : null,
+                                    animate: isPlaybackActive,
+                                    revealAll: isPlaybackPast || (isPlaybackActive && turn.role === 'user'),
+                                    visibleUnitIds: turnVisibleUnitIds,
+                                  }
+                                : undefined
+                            }
                             segment={segment}
                             onToggle={toggleBlock}
                           />
@@ -283,6 +484,106 @@ function ReplayPanel({
           </ul>
         )}
       </div>
+      {session ? (
+        <div className="preview-block__dock" role="toolbar" aria-label="Playback controls">
+          <button
+            aria-label={playbackMode === 'playing' ? 'Pause playback' : 'Play transcript'}
+            className={`preview-block__action preview-block__action--icon ${playbackMode === 'playing' ? 'preview-block__action--active' : ''}`}
+            type="button"
+            onClick={() => {
+              if (playbackMode === 'playing') {
+                setPlaybackMode('paused')
+                return
+              }
+
+              if (playbackTurns.length === 0) {
+                return
+              }
+
+              if (playbackMode === 'idle' || playbackComplete) {
+                resetPlayback()
+              }
+
+              setPlaybackMode('playing')
+            }}
+          >
+            {playbackMode === 'playing' ? <Pause size={16} strokeWidth={1.8} /> : <Play size={16} strokeWidth={1.8} />}
+          </button>
+          <button
+            aria-label="Previous step"
+            className="preview-block__action preview-block__action--icon"
+            type="button"
+            disabled={!playbackCanStepBackward}
+            onClick={() => {
+              if (!playbackCanStepBackward) {
+                return
+              }
+
+              if (!playbackStarted) {
+                resetPlayback()
+                setPlaybackMode('paused')
+                return
+              }
+
+              setPlaybackMode('paused')
+              stepPlaybackBackward()
+            }}
+          >
+            <ChevronLeft size={16} strokeWidth={1.8} />
+          </button>
+          <button
+            aria-label="Next step"
+            className="preview-block__action preview-block__action--icon"
+            type="button"
+            disabled={playbackTurns.length === 0}
+            onClick={() => {
+              if (playbackTurns.length === 0) {
+                return
+              }
+
+              setPlaybackMode('paused')
+
+              if (!playbackStarted || playbackComplete) {
+                resetPlayback()
+                return
+              }
+
+              stepPlaybackForward()
+            }}
+          >
+            <ChevronRight size={16} strokeWidth={1.8} />
+          </button>
+          <button
+            aria-label={`Playback speed ${playbackSpeed}x`}
+            className="preview-block__action preview-block__action--speed"
+            type="button"
+            onClick={() => setPlaybackSpeedIndex((current) => (current + 1) % PLAYBACK_SPEEDS.length)}
+          >
+            {playbackSpeed}x
+          </button>
+          <button className="preview-block__action" type="button" onClick={onOpenPreview}>
+            <Eye size={14} strokeWidth={1.8} />
+            Preview
+          </button>
+          <button
+            className="preview-block__action preview-block__action--primary"
+            type="button"
+            disabled={!canExport || isExporting}
+            onClick={onExport}
+          >
+            <Download size={14} strokeWidth={1.8} />
+            {isExporting ? 'Exporting…' : 'Export'}
+          </button>
+          <button
+            aria-label="Open export settings"
+            className="preview-block__action preview-block__action--icon"
+            type="button"
+            onClick={onOpenExportSettings}
+          >
+            <Settings2 size={16} strokeWidth={1.8} />
+          </button>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -293,24 +594,37 @@ function formatPreviewRoleLabel(role: PreviewTurnRole): string {
 
 function ReplaySegmentDisclosure({
   expandedBlockIds,
+  playback,
   onToggle,
   segment,
 }: {
   expandedBlockIds: ReadonlySet<string>
+  playback?: {
+    activeUnitId: string | null
+    animate: boolean
+    revealAll: boolean
+    visibleUnitIds: ReadonlySet<string>
+  }
   onToggle: (id: string) => void
   segment: ReplaySegment
 }) {
   if (segment.type === 'block') {
     if (segment.block.type !== 'thinking' && !(segment.block.type === 'meta' && segment.block.appearance === 'disclosure')) {
-      return <ReplayInlineBlock block={segment.block} />
+      return (
+        <ReplayPlaybackUnit playback={playback} unitId={segment.block.id}>
+          <ReplayInlineBlock block={segment.block} />
+        </ReplayPlaybackUnit>
+      )
     }
 
     return (
-      <ReplayBlockDisclosure
-        block={segment.block}
-        isOpen={expandedBlockIds.has(segment.block.id)}
-        onToggle={() => onToggle(segment.block.id)}
-      />
+      <ReplayPlaybackUnit playback={playback} unitId={segment.block.id}>
+        <ReplayBlockDisclosure
+          block={segment.block}
+          isOpen={expandedBlockIds.has(segment.block.id)}
+          onToggle={() => onToggle(segment.block.id)}
+        />
+      </ReplayPlaybackUnit>
     )
   }
 
@@ -318,12 +632,13 @@ function ReplaySegmentDisclosure({
     return (
       <div className="replay-tool-run">
         {segment.blocks.map((block) => (
-          <ReplayBlockDisclosure
-            key={block.id}
-            block={block}
-            isOpen={expandedBlockIds.has(block.id)}
-            onToggle={() => onToggle(block.id)}
-          />
+          <ReplayPlaybackUnit key={block.id} playback={playback} unitId={block.id}>
+            <ReplayBlockDisclosure
+              block={block}
+              isOpen={expandedBlockIds.has(block.id)}
+              onToggle={() => onToggle(block.id)}
+            />
+          </ReplayPlaybackUnit>
         ))}
       </div>
     )
@@ -333,29 +648,65 @@ function ReplaySegmentDisclosure({
   const summaryMeta = getReplayToolRunSummaryMeta(segment)
 
   return (
-    <details className="replay-tool-group" open={isOpen}>
-      <summary
-        className="replay-tool-group__summary"
-        onClick={(event) => {
-          event.preventDefault()
-          onToggle(segment.id)
-        }}
-      >
-        <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
-        <span className="replay-tool-group__label">{getReplayToolRunLabel(segment)}</span>
-        {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
-      </summary>
-      <div className="replay-tool-group__content">
-        {segment.blocks.map((block) => (
-          <ReplayBlockDisclosure
-            key={block.id}
-            block={block}
-            isOpen={expandedBlockIds.has(block.id)}
-            onToggle={() => onToggle(block.id)}
-          />
-        ))}
-      </div>
-    </details>
+    <ReplayPlaybackUnit playback={playback} unitId={segment.id}>
+      <details className="replay-tool-group" open={isOpen}>
+        <summary
+          className="replay-tool-group__summary"
+          onClick={(event) => {
+            event.preventDefault()
+            onToggle(segment.id)
+          }}
+        >
+          <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
+          <span className="replay-tool-group__label">{getReplayToolRunLabel(segment)}</span>
+          {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
+        </summary>
+        <div className="replay-tool-group__content">
+          {segment.blocks.map((block) => (
+            <ReplayBlockDisclosure
+              key={block.id}
+              block={block}
+              isOpen={expandedBlockIds.has(block.id)}
+              onToggle={() => onToggle(block.id)}
+            />
+          ))}
+        </div>
+      </details>
+    </ReplayPlaybackUnit>
+  )
+}
+
+function ReplayPlaybackUnit({
+  children,
+  playback,
+  unitId,
+}: {
+  children: React.ReactNode
+  playback?: {
+    activeUnitId: string | null
+    animate: boolean
+    revealAll: boolean
+    visibleUnitIds: ReadonlySet<string>
+  }
+  unitId: string
+}) {
+  if (playback && !playback.revealAll && !playback.visibleUnitIds.has(unitId)) {
+    return null
+  }
+
+  const isActive = playback?.activeUnitId === unitId
+  const shouldAnimate = Boolean(playback?.animate && playback && playback.visibleUnitIds.has(unitId))
+
+  return (
+    <div
+      className={[
+        'replay-playback-unit',
+        shouldAnimate ? 'is-revealed' : '',
+        isActive ? 'is-active' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      {children}
+    </div>
   )
 }
 
@@ -407,6 +758,155 @@ function ReplayBlockDisclosure({
       />
     </details>
   )
+}
+
+function getReplaySegmentPlaybackUnits(segment: ReplaySegment): PlaybackUnit[] {
+  if (segment.type === 'block') {
+    return [
+      {
+        delayMs: estimateReplayBlockDelay(segment.block),
+        id: segment.block.id,
+      },
+    ]
+  }
+
+  if (shouldGroupReplayToolRun(segment)) {
+    return [
+      {
+        delayMs: clampDelay(260 + segment.blocks.length * 60),
+        id: segment.id,
+      },
+    ]
+  }
+
+  return segment.blocks.map((block) => ({
+    delayMs: estimateReplayBlockDelay(block),
+    id: block.id,
+  }))
+}
+
+function estimateReplayBlockDelay(block: ReplayRenderableBlock): number {
+  // Preview pacing is heuristic UX timing, not source-of-truth protocol timing.
+  if (block.type === 'tool') {
+    return clampDelay(280)
+  }
+
+  if (block.type === 'thinking') {
+    return clampDelay(block.text.length * 8)
+  }
+
+  if (block.type === 'meta') {
+    return clampDelay((block.body?.length ?? block.title.length) * 6)
+  }
+
+  return clampDelay(block.text.length * 10)
+}
+
+function clampDelay(value: number): number {
+  return Math.min(Math.max(value, 140), 900)
+}
+
+function getNextPlaybackDelay(
+  turns: readonly PlaybackTurnPlan[],
+  turnIndex: number,
+  visibleUnitIds: ReadonlySet<string>,
+  playbackSpeed: number,
+): number | null {
+  const currentTurn = turns[turnIndex]
+  if (!currentTurn) {
+    return null
+  }
+
+  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
+  if (nextUnit) {
+    return Math.max(60, Math.round(nextUnit.delayMs / playbackSpeed))
+  }
+
+  if (turnIndex < turns.length - 1) {
+    return Math.max(120, Math.round(PLAYBACK_TURN_DWELL_MS / playbackSpeed))
+  }
+
+  return null
+}
+
+function getNextPlaybackState(
+  turns: readonly PlaybackTurnPlan[],
+  turnIndex: number,
+  visibleUnitIds: ReadonlySet<string>,
+): { revealedUnitIds: Set<string>; turnIndex: number } | null {
+  const currentTurn = turns[turnIndex]
+  if (!currentTurn) {
+    return null
+  }
+
+  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
+  if (nextUnit) {
+    const nextVisibleUnitIds = new Set(visibleUnitIds)
+    nextVisibleUnitIds.add(nextUnit.id)
+    return {
+      revealedUnitIds: nextVisibleUnitIds,
+      turnIndex,
+    }
+  }
+
+  if (turnIndex < turns.length - 1) {
+    return {
+      revealedUnitIds: new Set(visibleUnitIds),
+      turnIndex: turnIndex + 1,
+    }
+  }
+
+  return null
+}
+
+function getPreviousPlaybackState(
+  turns: readonly PlaybackTurnPlan[],
+  turnIndex: number,
+  visibleUnitIds: ReadonlySet<string>,
+): { revealedUnitIds: Set<string>; turnIndex: number } | null {
+  const currentTurn = turns[turnIndex]
+  if (!currentTurn) {
+    return null
+  }
+
+  for (let index = currentTurn.units.length - 1; index >= 0; index -= 1) {
+    const unit = currentTurn.units[index]
+    if (unit && visibleUnitIds.has(unit.id)) {
+      const nextVisibleUnitIds = new Set(visibleUnitIds)
+      nextVisibleUnitIds.delete(unit.id)
+      return {
+        revealedUnitIds: nextVisibleUnitIds,
+        turnIndex,
+      }
+    }
+  }
+
+  if (turnIndex > 0) {
+    return {
+      revealedUnitIds: new Set(visibleUnitIds),
+      turnIndex: turnIndex - 1,
+    }
+  }
+
+  return null
+}
+
+function getActivePlaybackUnitId(
+  turn: PlaybackTurnPlan | undefined,
+  visibleUnitIds: ReadonlySet<string>,
+): string | null {
+  if (!turn) {
+    return null
+  }
+
+  for (let index = turn.units.length - 1; index >= 0; index -= 1) {
+    const candidate = turn.units[index]
+    if (candidate && visibleUnitIds.has(candidate.id)) {
+      return candidate.id
+    }
+  }
+
+  return null
 }
 
 export { ReplayPanel }

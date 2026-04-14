@@ -1,8 +1,8 @@
-import { Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserPanel, type SessionSummary } from './features/browser/BrowserPanel'
 import { ReplayPanel } from './features/preview/ReplayPanel'
 import type { PreviewTurn, ReplaySession } from './features/preview/ReplayPanel'
+import { ExportPreviewDialog } from './features/export/ExportPreviewDialog'
 import { ExportPanel, type ExportOptions } from './features/export/ExportPanel'
 import { createSessionReplayApiClient as createApiClient } from './lib/api'
 import {
@@ -20,7 +20,6 @@ import type {
 import type { SessionWarning } from './lib/session'
 import { getReplayTurnPreviewText, summarizeReplayTurn } from './lib/replay/blocks'
 import { expandReplayBlocks } from './lib/replay/context-blocks'
-import { formatReplayToolEditorText } from './lib/replay/tool-format'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
 const providerLabelMap: Record<string, string> = {
@@ -63,16 +62,7 @@ function formatTimeLabel(timestamp?: string | null): string {
   return time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function formatBlockEditorText(
-  block: MaterializedReplaySession['turns'][number]['blocks'][number],
-): string {
-  if (block.type !== 'tool') {
-    return block.text
-  }
-
-  return formatReplayToolEditorText(block)
-}
-
+/** Maps the normalized replay payload into the lighter-weight playback view model. */
 function makeReplaySession(
   session: MaterializedReplaySession,
   draft: { bookmarks: Record<string, { label: string }> } | undefined,
@@ -107,6 +97,7 @@ function makeReplaySession(
   }
 }
 
+/** Filters and labels catalog rows for the session browser rail. */
 function makeBrowserRows(sessions: SessionRef[], query: string): SessionSummary[] {
   const trimmed = query.trim().toLowerCase()
   return sessions
@@ -133,6 +124,7 @@ function makeBrowserRows(sessions: SessionRef[], query: string): SessionSummary[
     }))
 }
 
+/** Resolves the API base so production exports can still talk to the local server. */
 function resolveApiClient() {
   const explicit = import.meta.env.VITE_SESSION_REPLAY_API_BASE
   const baseUrl = import.meta.env.DEV ? explicit ?? '' : explicit ?? 'http://127.0.0.1:4848'
@@ -140,6 +132,7 @@ function resolveApiClient() {
   return createApiClient(baseUrl)
 }
 
+/** Summarizes partial catalog failures without blocking healthy sessions. */
 function formatCatalogNotice(warnings: readonly SessionWarning[]): string | null {
   if (warnings.length === 0) {
     return null
@@ -149,6 +142,7 @@ function formatCatalogNotice(warnings: readonly SessionWarning[]): string | null
   return `${warnings.length} ${label} skipped during catalog refresh. Check console for paths.`
 }
 
+/** Keeps the sidebar summary stable while background indexing refreshes run. */
 function formatCatalogSummary(status: SessionCatalogStatus | null, sessionCount: number): string {
   if (!status || status.state === 'ready') {
     return `${sessionCount} sessions loaded`
@@ -176,13 +170,14 @@ function App() {
   const [loadedSession, setLoadedSession] = useState<MaterializedReplaySession | null>(null)
   const [previewHtml, setPreviewHtml] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [exportSettingsOpen, setExportSettingsOpen] = useState(false)
   const pollingRequestInFlight = useRef(false)
 
   const ensureDraft = useEditorStore((state) => state.ensureDraft)
-  const setBlockText = useEditorStore((state) => state.setBlockText)
   const setBookmark = useEditorStore((state) => state.setBookmark)
   const removeBookmark = useEditorStore((state) => state.removeBookmark)
   const toggleTurnIncluded = useEditorStore((state) => state.toggleTurnIncluded)
@@ -262,9 +257,10 @@ function App() {
       })
     : ''
 
-  const materializedSession = loadedSession
-    ? materializeReplaySession(loadedSession, loadedDraft)
-    : null
+  const materializedSession = useMemo(
+    () => (loadedSession ? materializeReplaySession(loadedSession, loadedDraft) : null),
+    [loadedDraft, loadedSession],
+  )
   const renderRequest = useMemo(() => {
     if (!loadedSession) {
       return null
@@ -278,6 +274,7 @@ function App() {
       return ''
     }
 
+    // Only draft fields that affect rendered export output belong in this signature.
     return JSON.stringify({
       baseRevision,
       blockTextEdits: loadedDraft?.blockTextEdits ?? {},
@@ -383,7 +380,10 @@ function App() {
       setSessionError(null)
       setSessionLoading(true)
       setSelectedSessionId(sessionId)
+      setExportError(null)
+      setExportSettingsOpen(false)
       setLoadedSession(null)
+      setPreviewOpen(false)
       setPreviewHtml('')
       setPreviewError(null)
       try {
@@ -447,20 +447,14 @@ function App() {
       link.click()
       document.body.removeChild(link)
       URL.revokeObjectURL(objectUrl)
+      setExportSettingsOpen(false)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Export failed'
       setExportError(message)
+      setExportSettingsOpen(true)
     } finally {
       setExporting(false)
     }
-  }
-
-  const handleBlockTextChange = (turnId: string, blockId: string, nextText: string) => {
-    if (!loadedSession || !loadedDraft) {
-      return
-    }
-
-    setBlockText(loadedSession.id, baseRevision, turnId, blockId, nextText)
   }
 
   const handleBookmarkChange = (turnId: string, nextLabel: string) => {
@@ -484,6 +478,8 @@ function App() {
     toggleTurnIncluded(loadedSession.id, baseRevision, turnId)
   }
 
+  const canExport = Boolean(loadedSession) && Boolean(materializedSession)
+
   return (
     <SidebarProvider open={browserOpen} onOpenChange={setBrowserOpen}>
       <div className="app-root">
@@ -505,149 +501,49 @@ function App() {
         </Sidebar>
 
         <SidebarInset className="app-main">
-          <main className="workspace-split">
-            <section className="workspace-pane editor-pane">
-              <section className="editor-shell">
-                <header className="workspace-header">
-                  <div className="workspace-header__copy">
-                    <p className="eyebrow">Transcript draft</p>
-                    <h2>Session edits</h2>
-                  </div>
-                  <div className="toolbar-grid">
-                    {sessionLoading ? <span className="toolbar-chip">Loading selected session…</span> : null}
-                    {sessionError ? <span className="toolbar-chip">{sessionError}</span> : null}
-                    {!loadedSession && !sessionLoading ? (
-                      <span className="toolbar-chip">Select session to begin</span>
-                    ) : null}
-                    {loadedSession ? <span className="toolbar-chip">Hide + bookmark now live in session playback</span> : null}
-                    {!sessionsLoading && !sessionsError && !sessions.length ? (
-                      <span className="toolbar-chip">No sessions discovered</span>
-                    ) : null}
-                  </div>
-                </header>
-
-                {loadedSession ? (
-                  <div className="workspace-content">
-                    <article className="summary-card summary-card--session">
-                      <div className="summary-card__heading">
-                        <div>
-                          <p className="eyebrow">Current session</p>
-                          <h3>{loadedSession.title}</h3>
-                        </div>
-                        <span className="summary-card__spark">
-                          <Sparkles size={14} strokeWidth={1.8} />
-                          Preview linked
-                        </span>
-                      </div>
-                      <p>
-                        {providerLabelMap[loadedSession.source] ?? loadedSession.source}
-                        {loadedSession.project ? ` · ${loadedSession.project}` : null}
-                      </p>
-                      <p className="summary-meta">
-                        <span>{materializedSession?.turns.length ?? 0} turns</span>
-                        <span>{visibleTurnCount}/{totalTurnCount} visible</span>
-                      </p>
-                    </article>
-                    <ul className="turn-strip">
-                      {materializedSession?.turns.length ? (
-                        materializedSession.turns.map((turn) => (
-                          <li
-                            key={turn.id}
-                            className={`turn-strip__item ${turn.included === false ? 'is-hidden' : ''}`}
-                          >
-                            <div className="turn-strip__editor">
-                              <p className="turn-strip__label">
-                                {turn.blocks.length ? turn.blocks[0]?.title || roleForPreview(turn.role) : roleForPreview(turn.role)}
-                                {turn.timestamp ? ` · ${formatTimeLabel(turn.timestamp)}` : ''}
-                              </p>
-                              {turn.blocks.map((block) => {
-                                const value =
-                                  block.type === 'tool'
-                                    ? formatBlockEditorText(block)
-                                    : loadedDraft?.blockTextEdits?.[turn.id]?.[block.id] ?? block.text
-
-                                return (
-                                  <textarea
-                                    key={block.id}
-                                    className="input turn-strip__textarea"
-                                    disabled={block.type === 'tool'}
-                                    rows={Math.min(8, Math.max(2, value.split('\n').length))}
-                                    value={value}
-                                    onChange={
-                                      block.type === 'tool'
-                                        ? undefined
-                                        : (event) => handleBlockTextChange(turn.id, block.id, event.target.value)
-                                    }
-                                  />
-                                )
-                              })}
-                            </div>
-                          </li>
-                        ))
-                      ) : (
-                        <li className="turn-strip__item">
-                          <p className="turn-strip-empty">No turns available for this session</p>
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                ) : (
-                  <section className="workspace-content turn-strip-empty">
-                    <p className="toolbar-chip">Select session to view and edit turns.</p>
-                  </section>
-                )}
-              </section>
-            </section>
-
+          <main className="workspace-split workspace-split--single">
             <section className="workspace-pane preview-pane">
               <section className="preview-workspace">
+                {sessionLoading ? <span className="toolbar-chip">Loading selected session…</span> : null}
+                {sessionError ? <span className="toolbar-chip">{sessionError}</span> : null}
+                {!loadedSession && !sessionLoading ? (
+                  <span className="toolbar-chip">Select session to begin</span>
+                ) : null}
+                {!sessionsLoading && !sessionsError && !sessions.length ? (
+                  <span className="toolbar-chip">No sessions discovered</span>
+                ) : null}
                 <ReplayPanel
+                  canExport={canExport}
+                  isExporting={exporting}
+                  onExport={() => {
+                    void handleExport()
+                  }}
                   session={replaySession}
                   visibleCount={visibleTurnCount}
                   totalCount={totalTurnCount}
                   onBookmarkChange={handleBookmarkChange}
+                  onOpenExportSettings={() => setExportSettingsOpen(true)}
+                  onOpenPreview={() => setPreviewOpen(true)}
                   onToggleTurnIncluded={toggleTurn}
                 />
-
-                {previewError ? (
-                  <section className="preview-block preview-block--status">
-                    <div className="card__content">
-                      <p className="preview-block__hint">Preview error: {previewError}</p>
-                    </div>
-                  </section>
-                ) : null}
-
-                {previewLoading ? (
-                  <section className="preview-block preview-block--status">
-                    <div className="card__content">
-                      <p className="preview-block__hint">Rendering preview…</p>
-                    </div>
-                  </section>
-                ) : null}
-
-                {!previewLoading && !previewError && previewHtml ? (
-                  <section className="card preview-frame-card">
-                    <div className="card__content">
-                      <iframe
-                        className="preview-block__content preview-frame"
-                        title="Replay preview"
-                        srcDoc={previewHtml}
-                      />
-                    </div>
-                  </section>
-                ) : null}
-
-                <ExportPanel
-                  options={exportOptions}
-                  canExport={Boolean(loadedSession) && Boolean(materializedSession)}
-                  isExporting={exporting}
-                  onOptionChange={handleExportOptionsChange}
-                  onExport={handleExport}
-                />
-                {exportError ? <p className="export-footer__hint">Export error: {exportError}</p> : null}
               </section>
             </section>
           </main>
+          <ExportPreviewDialog
+            isOpen={previewOpen}
+            onOpenChange={setPreviewOpen}
+            previewError={previewError}
+            previewHtml={previewHtml}
+            previewLoading={previewLoading}
+          />
+          <ExportPanel
+            options={exportOptions}
+            canExport={canExport}
+            error={exportError}
+            isOpen={exportSettingsOpen}
+            onOpenChange={setExportSettingsOpen}
+            onOptionChange={handleExportOptionsChange}
+          />
         </SidebarInset>
       </div>
     </SidebarProvider>
