@@ -33,9 +33,15 @@ describe('copilot provider', () => {
       expect(loaded.cwd).toBe('/Users/me/workspaces/demo-workspace')
       expect(loaded.turns.length).toBeGreaterThanOrEqual(2)
       expect(loaded.turns[0]?.userText).toBe('Can you inspect this repo?')
-      const assistantTurn = loaded.turns.find((turn) => turn.toolCalls.length > 0)
-      expect(assistantTurn?.toolCalls[0]?.name).toBe('Read')
-      expect(assistantTurn?.toolCalls[0]?.isError).toBe(false)
+      const assistantTurn = loaded.turns.find((turn) =>
+        turn.assistantBlocks.some((block) => block.kind === 'tool-call'),
+      )
+      const toolCall = assistantTurn?.assistantBlocks.find((block) => block.kind === 'tool-call')
+      expect(toolCall).toMatchObject({
+        kind: 'tool-call',
+        name: 'Read',
+        isError: false,
+      })
     } finally {
       await rm(homeDirectory, { force: true, recursive: true })
     }

@@ -84,8 +84,12 @@ describe('gemini provider', () => {
       expect(loaded.turns).toHaveLength(1)
       expect(loaded.turns[0]?.userText).toBe('Run a failing command')
       expect(loaded.turns[0]?.assistantBlocks[0]?.kind).toBe('thinking')
-      expect(loaded.turns[0]?.toolCalls[0]?.name).toBe('Bash')
-      expect(loaded.turns[0]?.toolCalls[0]?.isError).toBe(true)
+      const toolCall = loaded.turns[0]?.assistantBlocks.find((block) => block.kind === 'tool-call')
+      expect(toolCall).toMatchObject({
+        kind: 'tool-call',
+        name: 'Bash',
+        isError: true,
+      })
     } finally {
       await rm(homeDirectory, { force: true, recursive: true })
     }

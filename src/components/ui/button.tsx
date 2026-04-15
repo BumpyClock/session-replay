@@ -1,4 +1,4 @@
-import { type ButtonHTMLAttributes } from 'react'
+import { forwardRef, type ButtonHTMLAttributes } from 'react'
 
 import { cn } from './utils'
 
@@ -28,17 +28,21 @@ const sizeClassMap: Record<Size, string> = {
   md: 'button--md',
 }
 
-function Button({
-  type = 'button',
-  variant = 'default',
-  size = 'md',
-  className,
-  asChild = false,
-  ...props
-}: ButtonProps) {
+const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    type = 'button',
+    variant = 'default',
+    size = 'md',
+    className,
+    asChild = false,
+    ...props
+  },
+  ref,
+) {
   if (asChild) {
     return (
       <button
+        ref={ref}
         type={type}
         className={cn(variantClassMap[variant], sizeClassMap[size], className)}
         {...props}
@@ -48,12 +52,13 @@ function Button({
 
   return (
     <button
+      ref={ref}
       type={type}
       className={cn(variantClassMap[variant], sizeClassMap[size], className)}
       {...props}
     />
   )
-}
+})
 
 export { Button }
 export type { ButtonProps }

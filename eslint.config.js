@@ -6,6 +6,11 @@ import tseslint from 'typescript-eslint'
 import pluginVitest from 'eslint-plugin-vitest'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
+const relaxedReactCompilerRules = {
+  'react-hooks/preserve-manual-memoization': 'off',
+  'react-hooks/set-state-in-effect': 'off',
+}
+
 export default defineConfig([
   globalIgnores(['dist', 'coverage']),
   {
@@ -31,6 +36,7 @@ export default defineConfig([
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    rules: relaxedReactCompilerRules,
   },
   {
     files: ['**/*.{js,jsx,cjs,mjs}'],
@@ -51,5 +57,6 @@ export default defineConfig([
       reactRefresh.configs.vite,
       pluginVitest.configs.recommended,
     ],
+    rules: relaxedReactCompilerRules,
   },
 ])

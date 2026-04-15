@@ -77,6 +77,7 @@ function ReplayPanel({
   const [editingNoteTurnId, setEditingNoteTurnId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle')
+  const [playbackAutoFollow, setPlaybackAutoFollow] = useState(true)
   const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(() => {
     const defaultIndex = PLAYBACK_SPEEDS.indexOf(DEFAULT_PLAYBACK_SPEED)
     return defaultIndex >= 0 ? defaultIndex : 0
@@ -85,6 +86,8 @@ function ReplayPanel({
   const [revealedUnitIds, setRevealedUnitIds] = useState<Set<string>>(new Set())
   const contentRef = useRef<HTMLDivElement | null>(null)
   const turnRefs = useRef<Record<string, HTMLLIElement | null>>({})
+  const programmaticScrollRef = useRef(false)
+  const programmaticScrollTimeoutRef = useRef<number | null>(null)
 
   const layout = useMemo(
     () => externalLayout ?? (session ? prepareTranscriptLayout(session.turns) : null),
@@ -97,12 +100,14 @@ function ReplayPanel({
       setEditingNoteTurnId(null)
       setNoteDraft('')
       setPlaybackMode('idle')
+      setPlaybackAutoFollow(true)
       setPlaybackTurnIndex(0)
       setRevealedUnitIds(new Set())
       return
     }
 
     setExpandedBlockIds(collectDefaultOpenIds(layout))
+    setPlaybackAutoFollow(true)
   }, [layout, session?.id])
 
   const playbackTurns = useMemo(
@@ -155,19 +160,8 @@ function ReplayPanel({
       return []
     }
 
-    return session.turns.filter((turn) => {
-      if (playbackStarted && turn.isHidden) {
-        return false
-      }
-
-      const playbackIndex = playbackTurnIndexById.get(turn.id)
-      if (playbackStarted && playbackIndex !== undefined && playbackIndex > playbackTurnIndex) {
-        return false
-      }
-
-      return true
-    })
-  }, [session, playbackStarted, playbackTurnIndex, playbackTurnIndexById])
+    return session.turns
+  }, [session])
 
   const displayedTurnLayouts = useMemo(
     () => displayedTurns.map((turn) => getRequiredTurnLayout(layout, turn.id)),
@@ -238,10 +232,35 @@ function ReplayPanel({
     closeNoteEditor()
   }, [closeNoteEditor, editingNoteTurnId, noteDraft, onBookmarkChange])
 
+  const clearProgrammaticScrollTracking = useCallback(() => {
+    programmaticScrollRef.current = false
+    if (programmaticScrollTimeoutRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimeoutRef.current)
+      programmaticScrollTimeoutRef.current = null
+    }
+  }, [])
+
   const resetPlayback = useCallback(() => {
+    clearProgrammaticScrollTracking()
+    setPlaybackAutoFollow(true)
     setPlaybackTurnIndex(0)
     setRevealedUnitIds(new Set())
-  }, [])
+  }, [clearProgrammaticScrollTracking])
+
+  // Ignore scroll events caused by our own playback follow updates so only
+  // user-driven scrolling disables auto-follow.
+  const withProgrammaticScroll = useCallback((runScroll: () => void) => {
+    programmaticScrollRef.current = true
+    runScroll()
+
+    if (programmaticScrollTimeoutRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimeoutRef.current)
+    }
+
+    programmaticScrollTimeoutRef.current = window.setTimeout(() => {
+      clearProgrammaticScrollTracking()
+    }, 150)
+  }, [clearProgrammaticScrollTracking])
 
   const stepPlaybackForward = useCallback(() => {
     const nextState = getNextPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
@@ -294,22 +313,22 @@ function ReplayPanel({
     const animationFrame = window.requestAnimationFrame(() => {
       if (typeof content.scrollTo === 'function') {
         content.scrollTo({
-          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
-          top: content.scrollHeight,
+          behavior: 'auto',
+          top: 0,
         })
         return
       }
 
-      content.scrollTop = content.scrollHeight
+      content.scrollTop = 0
     })
 
     return () => {
       window.cancelAnimationFrame(animationFrame)
     }
-  }, [activePlaybackUnitId, playbackMode, playbackStarted, playbackTurnIndex, revealedUnitIds, session?.id])
+  }, [session?.id])
 
   useEffect(() => {
-    if (!playbackStarted) {
+    if (!playbackStarted || !playbackAutoFollow) {
       return
     }
 
@@ -318,24 +337,17 @@ function ReplayPanel({
       return
     }
 
-    const target = turnRefs.current[currentTurnId]
     const activeOffset = activeDisplayedTurnIndex >= 0 ? rowOffsets[activeDisplayedTurnIndex] : null
     const content = contentRef.current
 
     const animationFrame = window.requestAnimationFrame(() => {
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({
-          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
-          block: 'end',
-        })
-        return
-      }
-
       if (content && activeOffset !== null && typeof content.scrollTo === 'function') {
         const nextTop = Math.max(0, activeOffset - Math.max(0, content.clientHeight - 160))
-        content.scrollTo({
-          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
-          top: nextTop,
+        withProgrammaticScroll(() => {
+          content.scrollTo({
+            behavior: 'auto',
+            top: nextTop,
+          })
         })
       }
     })
@@ -345,13 +357,19 @@ function ReplayPanel({
     }
   }, [
     activeDisplayedTurnIndex,
-    activePlaybackUnitId,
-    playbackMode,
+    playbackAutoFollow,
     playbackStarted,
     playbackTurnIndex,
     playbackTurns,
     rowOffsets,
+    withProgrammaticScroll,
   ])
+
+  useEffect(() => {
+    return () => {
+      clearProgrammaticScrollTracking()
+    }
+  }, [clearProgrammaticScrollTracking])
 
   const renderedTurnRange = virtualizationEnabled
     ? displayedTurns.slice(virtualTranscript.visibleRange.startIndex, virtualTranscript.visibleRange.endIndex + 1)
@@ -362,6 +380,18 @@ function ReplayPanel({
       <div
         ref={setContentNode}
         className={`preview-block__content preview-block__content--chat${session ? '' : ' preview-block__content--idle'}`}
+        onScroll={() => {
+          if (!playbackStarted || !playbackAutoFollow) {
+            return
+          }
+
+          if (programmaticScrollRef.current) {
+            clearProgrammaticScrollTracking()
+            return
+          }
+
+          setPlaybackAutoFollow(false)
+        }}
       >
         <header className="preview-block__header">
           <div className="preview-block__title-group">

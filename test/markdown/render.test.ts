@@ -165,7 +165,7 @@ describe('renderReplayTurnBodyHtml', () => {
   it('collapses subagent notifications into agent activity cards', () => {
     const html = renderReplayTurnBodyHtml(
       createTurn(
-        '<subagent_notification>{"agent_id":"agent-1","agent_path":"/tmp/subagents/agent-1","status":{"completed":"Findings ready"}}<\/subagent_notification>',
+        '<subagent_notification>{"agent_id":"agent-1","agent_path":"/tmp/subagents/agent-1","status":{"completed":"Findings ready"}}</subagent_notification>',
       ),
     )
 

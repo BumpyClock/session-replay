@@ -82,6 +82,9 @@ export function ReplayTurnRow({
   const rowRef = useRef<HTMLLIElement | null>(null)
   const Icon = roleIconMap[turn.role]
   const isEditingNote = editingNoteTurnId === turn.id
+  const preservesFuturePlaybackSpace = Boolean(
+    playback && !playback.isPast && !playback.isActive && !playback.revealAll,
+  )
 
   useEffect(() => {
     const node = rowRef.current
@@ -90,9 +93,11 @@ export function ReplayTurnRow({
     }
 
     onTurnNode?.(turn.id, node)
-    onMeasure?.(node.getBoundingClientRect().height)
+    if (!preservesFuturePlaybackSpace) {
+      onMeasure?.(node.getBoundingClientRect().height)
+    }
 
-    if (typeof ResizeObserver === 'undefined' || !onMeasure) {
+    if (typeof ResizeObserver === 'undefined' || !onMeasure || preservesFuturePlaybackSpace) {
       return () => onTurnNode?.(turn.id, null)
     }
 
@@ -105,7 +110,7 @@ export function ReplayTurnRow({
       observer.disconnect()
       onTurnNode?.(turn.id, null)
     }
-  }, [onMeasure, onTurnNode, turn.id, turnLayout, expandedBlockIds, playback, isEditingNote, noteDraft])
+  }, [onMeasure, onTurnNode, turn.id, turnLayout, expandedBlockIds, playback, isEditingNote, noteDraft, preservesFuturePlaybackSpace])
 
   return (
     <li
@@ -187,8 +192,11 @@ export function ReplayTurnRow({
             <p className="replay-turn__collapsed-text">{turn.previewText ?? turn.summary}</p>
           </div>
         ) : (
-          <div className="replay-turn__body">
-            {turnLayout.segments.map((segment) => (
+          <div
+            aria-hidden={preservesFuturePlaybackSpace ? 'true' : undefined}
+            className={`replay-turn__body${preservesFuturePlaybackSpace ? ' replay-turn__body--placeholder' : ''}`}
+          >
+            {preservesFuturePlaybackSpace ? null : turnLayout.segments.map((segment) => (
               <ReplaySegmentDisclosure
                 key={segment.id}
                 blockHtml={turnLayout.blockHtml}

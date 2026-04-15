@@ -99,6 +99,52 @@ const session: ReplaySession = {
 const sessionLayout = prepareTranscriptLayout(session.turns)
 
 describe('ReplayPanel', () => {
+  it('keeps newly loaded sessions pinned to the top instead of jumping to the end', () => {
+    const animationFrames: FrameRequestCallback[] = []
+    const originalRequestAnimationFrame = window.requestAnimationFrame
+    const originalCancelAnimationFrame = window.cancelAnimationFrame
+
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      animationFrames.push(callback)
+      return animationFrames.length
+    }) as typeof window.requestAnimationFrame
+    window.cancelAnimationFrame = vi.fn()
+
+    try {
+      const { container } = render(
+        <ReplayPanel
+          canExport
+          layout={sessionLayout}
+          onExport={vi.fn()}
+          session={session}
+          totalCount={3}
+          visibleCount={2}
+          onBookmarkChange={vi.fn()}
+          onOpenExportSettings={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onToggleTurnIncluded={vi.fn()}
+        />,
+      )
+
+      const content = container.querySelector('.preview-block__content--chat') as HTMLDivElement
+      const scrollTo = vi.fn()
+      Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 640 })
+      content.scrollTo = scrollTo
+
+      act(() => {
+        animationFrames.splice(0).forEach((callback) => callback(0))
+      })
+
+      expect(scrollTo).toHaveBeenCalledWith({
+        behavior: 'auto',
+        top: 0,
+      })
+    } finally {
+      window.requestAnimationFrame = originalRequestAnimationFrame
+      window.cancelAnimationFrame = originalCancelAnimationFrame
+    }
+  })
+
   it('renders a single refined empty state when no session is selected', () => {
     render(
       <ReplayPanel
@@ -233,6 +279,141 @@ describe('ReplayPanel', () => {
       expect(screen.getByRole('heading', { level: 2, name: 'Heading' })).toBeInTheDocument()
       expect(screen.queryByText('completed · src/App.tsx')).not.toBeInTheDocument()
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps future turn headers mounted during playback while their bodies stay unrevealed', () => {
+    const playbackScrollSession: ReplaySession = {
+      ...session,
+      turnCount: 4,
+      turns: [
+        session.turns[0],
+        session.turns[1],
+        {
+          blocks: [
+            {
+              id: 'turn-3-user',
+              text: 'Future question body',
+              type: 'text',
+            },
+          ],
+          id: 'turn-3',
+          role: 'user',
+          summary: 'Future follow-up question',
+          timeLabel: '07:06 AM',
+          timestamp: '2026-04-13T07:06:00.000Z',
+        },
+        {
+          blocks: [
+            {
+              id: 'turn-4-text',
+              text: 'Future answer body',
+              type: 'text',
+            },
+          ],
+          id: 'turn-4',
+          role: 'assistant',
+          summary: 'Future answer summary',
+          timeLabel: '07:07 AM',
+          timestamp: '2026-04-13T07:07:00.000Z',
+        },
+      ],
+      updatedAt: '2026-04-13T07:07:00.000Z',
+    }
+
+    const { container } = render(
+      <ReplayPanel
+        canExport
+        layout={prepareTranscriptLayout(playbackScrollSession.turns)}
+        onExport={vi.fn()}
+        session={playbackScrollSession}
+        totalCount={4}
+        visibleCount={4}
+        onBookmarkChange={vi.fn()}
+        onOpenExportSettings={vi.fn()}
+        onOpenPreview={vi.fn()}
+        onToggleTurnIncluded={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
+
+    expect(screen.getByText('Future follow-up question')).toBeInTheDocument()
+    expect(screen.getByText('Future answer summary')).toBeInTheDocument()
+    expect(screen.queryByText('Future question body')).not.toBeInTheDocument()
+    expect(screen.queryByText('Future answer body')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.replay-turn__body--placeholder')).toHaveLength(3)
+  })
+
+  it('lets users scroll up during playback without snapping back to the active turn', async () => {
+    vi.useFakeTimers()
+
+    const animationFrames: FrameRequestCallback[] = []
+    const originalRequestAnimationFrame = window.requestAnimationFrame
+    const originalCancelAnimationFrame = window.cancelAnimationFrame
+
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      animationFrames.push(callback)
+      return animationFrames.length
+    }) as typeof window.requestAnimationFrame
+    window.cancelAnimationFrame = vi.fn()
+
+    try {
+      const { container } = render(
+        <ReplayPanel
+          canExport
+          layout={sessionLayout}
+          onExport={vi.fn()}
+          session={session}
+          totalCount={3}
+          visibleCount={2}
+          onBookmarkChange={vi.fn()}
+          onOpenExportSettings={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onToggleTurnIncluded={vi.fn()}
+        />,
+      )
+
+      const content = container.querySelector('.preview-block__content--chat') as HTMLDivElement
+      const scrollTo = vi.fn()
+      Object.defineProperty(content, 'scrollTop', { configurable: true, value: 0, writable: true })
+      content.scrollTo = scrollTo
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 320 })
+      Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 960 })
+
+      const flushAnimationFrames = () => {
+        act(() => {
+          while (animationFrames.length > 0) {
+            const pending = animationFrames.splice(0)
+            pending.forEach((callback) => callback(0))
+          }
+        })
+      }
+
+      flushAnimationFrames()
+      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
+      flushAnimationFrames()
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+      flushAnimationFrames()
+
+      const scrollCallCountBeforeManualScroll = scrollTo.mock.calls.length
+      content.scrollTop = 0
+      fireEvent.scroll(content)
+
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+      flushAnimationFrames()
+
+      expect(scrollTo).toHaveBeenCalledTimes(scrollCallCountBeforeManualScroll)
+      expect(screen.getByRole('button', { name: 'Pause playback' })).toBeInTheDocument()
+    } finally {
+      window.requestAnimationFrame = originalRequestAnimationFrame
+      window.cancelAnimationFrame = originalCancelAnimationFrame
       vi.useRealTimers()
     }
   })

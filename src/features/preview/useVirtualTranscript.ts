@@ -235,7 +235,7 @@ export function useVirtualTranscript({
   const [fontEpoch, setFontEpoch] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef<number>(0)
-  const estimatorRef = useRef(createBlockHeightEstimator(createPretextCache()))
+  const [estimator] = useState(() => createBlockHeightEstimator(createPretextCache()))
 
   useEffect(() => {
     if (typeof document === 'undefined' || !('fonts' in document) || !document.fonts?.ready) {
@@ -248,7 +248,7 @@ export function useVirtualTranscript({
         return
       }
 
-      estimatorRef.current.invalidateTextLayout()
+      estimator.invalidateTextLayout()
       setFontEpoch((current) => current + 1)
     }).catch(() => {
       // Font APIs are best-effort only; fallback estimates still work.
@@ -268,7 +268,7 @@ export function useVirtualTranscript({
           return estimateBlockHeight(meta)
         }
 
-        return estimatorRef.current.estimateBlockHeight(meta, maxWidth)
+        return estimator.estimateBlockHeight(meta, maxWidth)
       }
 
       return visibleLayouts.map((tl) => ({
@@ -276,7 +276,7 @@ export function useVirtualTranscript({
         measured: false,
       }))
     },
-    [visibleLayouts, containerWidth, fontEpoch],
+    [visibleLayouts, containerWidth, estimator, fontEpoch],
   )
 
   const [rowHeights, setRowHeights] = useState<RowMeasurement[]>(() => estimatedHeights)
