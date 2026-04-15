@@ -3,6 +3,7 @@ import { act } from '@testing-library/react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReplayPanel, type ReplaySession } from '../../src/features/preview/ReplayPanel'
+import { prepareTranscriptLayout } from '../../src/lib/replay/transcript-layout'
 
 const session: ReplaySession = {
   cwd: '/repo',
@@ -95,6 +96,8 @@ const session: ReplaySession = {
   updatedAt: '2026-04-13T07:04:00.000Z',
 }
 
+const sessionLayout = prepareTranscriptLayout(session.turns)
+
 describe('ReplayPanel', () => {
   it('renders a single refined empty state when no session is selected', () => {
     render(
@@ -130,6 +133,7 @@ describe('ReplayPanel', () => {
     const { container } = render(
       <ReplayPanel
         canExport
+        layout={sessionLayout}
         onExport={onExport}
         session={session}
         totalCount={3}
@@ -196,6 +200,7 @@ describe('ReplayPanel', () => {
       render(
         <ReplayPanel
           canExport
+          layout={sessionLayout}
           onExport={vi.fn()}
           session={session}
           totalCount={3}
@@ -265,9 +270,11 @@ describe('ReplayPanel', () => {
     }
 
     try {
+      const toolRunLayout = prepareTranscriptLayout(toolRunSession.turns)
       const { container } = render(
         <ReplayPanel
           canExport
+          layout={toolRunLayout}
           onExport={vi.fn()}
           session={toolRunSession}
           totalCount={2}

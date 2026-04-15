@@ -100,14 +100,15 @@ describe('renderReplayDocument', () => {
       initialTurnIndex: 2,
     })
 
-    expect(html).toContain('data-turn-index="0"')
-    expect(html).toContain('data-turn-index="1"')
-    expect(html).not.toContain('data-turn-index="2"')
+    expect(html).toContain('data-virtual-transcript')
+    expect(html).toContain('data-turn-index=\\"0\\"')
+    expect(html).toContain('data-turn-index=\\"1\\"')
+    expect(html).not.toContain('data-turn-index=\\"2\\"')
     expect(html).not.toContain('Thinking step')
     expect(html).toContain('class="preview-block preview-block--export"')
     expect(html).toContain('class="preview-block__dock" role="toolbar" aria-label="Playback controls"')
-    expect(html).toContain('class="replay-turn replay-turn--tool"')
-    expect(html).toContain('class="replay-turn__note-pill"')
+    expect(html).toContain('replay-turn replay-turn--tool')
+    expect(html).toContain('replay-turn__note-pill')
     expect(html).toContain('Answer')
     expect(html).not.toContain('class="hero"')
     expect(html).not.toContain('class="content-grid"')
@@ -124,13 +125,14 @@ describe('renderReplayDocument', () => {
 
     expect(hiddenThinkingHtml).toContain('Sensitive chain of thought')
     expect(hiddenThinkingHtml).not.toContain('2026-04-13T08:00:01.000Z')
-    expect(hiddenThinkingHtml).not.toContain('<time class="replay-turn__timestamp"')
+    expect(hiddenThinkingHtml).not.toContain('<time class=\\"replay-turn__timestamp\\"')
     expect(hiddenThinkingHtml).toContain('Tool: Read')
     expect(hiddenThinkingHtml).toContain('completed · src/App.tsx')
-    expect(hiddenThinkingHtml).toContain('class="replay-turn replay-turn--tool"')
-    expect(hiddenThinkingHtml).toContain('class="replay-turn__note-pill"')
+    expect(hiddenThinkingHtml).toContain('replay-turn replay-turn--tool')
+    expect(hiddenThinkingHtml).toContain('replay-turn__note-pill')
     expect(hiddenThinkingHtml).toContain('Answer')
-    expect(hiddenThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--thinking" data-replay-kind="thinking">')
+    expect(hiddenThinkingHtml).toContain('replay-disclosure replay-disclosure--thinking')
+    expect(hiddenThinkingHtml).toContain('data-replay-kind=\\"thinking\\"')
 
     const revealedThinkingHtml = renderReplayDocument(createFixtureSession(), {
       includeThinking: true,
@@ -140,13 +142,13 @@ describe('renderReplayDocument', () => {
 
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
     expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
-    expect(revealedThinkingHtml).toContain('<time class="replay-turn__timestamp" datetime="2026-04-13T08:00:01.000Z">')
-    expect(revealedThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--thinking" open data-replay-kind="thinking">')
-    expect(revealedThinkingHtml).toContain('<details class="replay-disclosure replay-disclosure--tool" data-replay-kind="tool">')
+    expect(revealedThinkingHtml).toContain('datetime=\\"2026-04-13T08:00:01.000Z\\"')
+    expect(revealedThinkingHtml).toContain('replay-disclosure replay-disclosure--thinking\\" open data-replay-kind=\\"thinking\\"')
+    expect(revealedThinkingHtml).toContain('replay-disclosure replay-disclosure--tool')
     expect(revealedThinkingHtml).toContain('Skill context')
     expect(revealedThinkingHtml).toContain('ux-designer')
     expect(revealedThinkingHtml).not.toContain('&lt;skill-context')
-    expect(revealedThinkingHtml).toContain('class="replay-turn__bookmark"')
+    expect(revealedThinkingHtml).toContain('replay-turn__bookmark')
   })
 
   it('filters tool blocks when export disables tool call rendering', () => {
@@ -176,8 +178,8 @@ describe('renderReplayDocument', () => {
       includeThinking: true,
     })
 
-    expect(html).toContain('<h2>Heading</h2>')
-    expect(html).toContain('<li>item one</li>')
+    expect(html).toContain('<h2>Heading<\\/h2>')
+    expect(html).toContain('<li>item one<\\/li>')
     expect(html).not.toContain('<div class="evil">owned</div>')
     expect(html).toContain('&lt;div class=&quot;evil&quot;&gt;owned&lt;/div&gt;')
   })
@@ -202,8 +204,8 @@ describe('renderReplayDocument', () => {
       includeToolCalls: true,
     })
 
-    expect(html).toContain('class="replay-tool-group"')
-    expect(html).toContain('>5 tool calls<')
+    expect(html).toContain('replay-tool-group')
+    expect(html).toContain('5 tool calls')
     expect(html).toContain('Read, Bash')
     expect(html).toContain('1 failed')
   })
@@ -237,8 +239,8 @@ describe('renderReplayDocument', () => {
       includeToolCalls: true,
     })
 
-    expect(html).toContain('class="replay-tool-group"')
-    expect(html).toContain('>2 tool calls<')
+    expect(html).toContain('replay-tool-group')
+    expect(html).toContain('2 tool calls')
     expect(html).toContain('Read, Bash')
     expect(html).not.toContain('data-action="toggle-thinking"')
   })

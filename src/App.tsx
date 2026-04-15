@@ -28,8 +28,8 @@ import type {
   SessionRef,
 } from './lib/api/contracts'
 import type { SessionWarning } from './lib/session'
-import { getReplayTurnPreviewText, summarizeReplayTurn } from './lib/replay/blocks'
-import { expandReplayBlocks } from './lib/replay/context-blocks'
+import { prepareTranscriptLayout } from './lib/replay/transcript-layout'
+import type { PreparedTranscriptLayout } from './lib/replay/transcript-layout-types'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
 const defaultFileNameFor = (session: Pick<SessionRef, 'id' | 'title'>): string => {
@@ -72,10 +72,15 @@ function formatTimeLabel(timestamp?: string | null): string {
 function makeReplaySession(
   session: MaterializedReplaySession,
   draft: { bookmarks: Record<string, { label: string }> } | undefined,
+  transcriptLayout: PreparedTranscriptLayout,
 ): ReplaySession {
   const turns: PreviewTurn[] = session.turns.map((turn) => {
     const isHidden = turn.included === false
     const bookmarkLabel = draft?.bookmarks[turn.id]?.label
+    const turnLayout = transcriptLayout.turnLayoutById.get(turn.id)
+    if (!turnLayout) {
+      throw new Error(`Missing prepared transcript layout for turn ${turn.id}`)
+    }
 
     return {
       blocks: turn.blocks,
@@ -84,8 +89,8 @@ function makeReplaySession(
       role: roleForPreview(turn.role),
       isBookmarked: Boolean(bookmarkLabel),
       isHidden,
-      previewText: getReplayTurnPreviewText(expandReplayBlocks(turn.blocks)),
-      summary: summarizeReplayTurn(turn),
+      previewText: turnLayout.previewText,
+      summary: turnLayout.summary,
       timestamp: turn.timestamp ?? '',
       timeLabel: formatTimeLabel(turn.timestamp),
     }
@@ -296,7 +301,14 @@ function App() {
     })
   }, [baseRevision, loadedDraft, loadedSession])
 
-  const replaySession = materializedSession ? makeReplaySession(materializedSession, loadedDraft) : null
+  const transcriptLayout = useMemo(
+    () => (materializedSession ? prepareTranscriptLayout(materializedSession.turns) : null),
+    [materializedSession],
+  )
+  const replaySession = useMemo(
+    () => (materializedSession && transcriptLayout ? makeReplaySession(materializedSession, loadedDraft, transcriptLayout) : null),
+    [loadedDraft, materializedSession, transcriptLayout],
+  )
   const visibleTurnCount = materializedSession
     ? materializedSession.turns.filter((turn) => turn.included !== false).length
     : 0
@@ -546,6 +558,7 @@ function App() {
             <ReplayPanel
               canExport={canExport}
               isExporting={exporting}
+              layout={transcriptLayout}
               onExport={() => {
                 void handleExport()
               }}

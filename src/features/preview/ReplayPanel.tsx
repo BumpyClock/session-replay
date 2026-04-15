@@ -1,41 +1,7 @@
+import { Clock, Download, Eye, Pause, Play, Settings2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReplayBlock, ReplayRole } from '../../lib/api/contracts'
 import {
-  Bookmark,
-  Bot,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Download,
-  Eye,
-  EyeOff,
-  MessageSquare,
-  Pause,
-  Play,
-  Settings2,
-  Sparkles,
-  Wrench,
-  UserRound,
-} from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReplayBlock } from '../../lib/api/contracts'
-import { renderReplayBlockBodyHtml } from '../../lib/markdown'
-import {
-  getReplayBlockLabel,
-  getReplayBlockSummaryMeta,
-  getReplayTurnTone,
-} from '../../lib/replay/blocks'
-import {
-  createReplaySegments,
-  getReplaySegmentDefaultOpen,
-  getReplaySegmentDisclosureIds,
-  getReplayToolRunLabel,
-  getReplayToolRunSummaryMeta,
-  shouldGroupReplayToolRun,
-  type ReplaySegment,
-} from '../../lib/replay/segments'
-import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../lib/replay/context-blocks'
-import {
-  createReplayPlaybackTurns,
   DEFAULT_PLAYBACK_SPEED,
   getActivePlaybackUnitId,
   getNextPlaybackDelay,
@@ -43,11 +9,17 @@ import {
   getPreviousPlaybackState,
   PLAYBACK_SPEEDS,
 } from '../../lib/replay/playback'
-import type { ReplayRole } from '../../lib/api/contracts'
+import {
+  collectDefaultOpenIds,
+  createPlaybackTurnsFromLayout,
+  prepareTranscriptLayout,
+} from '../../lib/replay/transcript-layout'
+import type { PreparedTranscriptLayout } from '../../lib/replay/transcript-layout-types'
+import { ReplayTurnRow, type ReplayTurnPlaybackState } from './ReplayTurnRow'
+import { ROW_GAP_PX, useVirtualTranscript, VIRTUALIZATION_THRESHOLD } from './useVirtualTranscript'
 
 export type PreviewTurnRole = ReplayRole
 
-/** Playback-ready turn shape used by the editor preview panel. */
 export type PreviewTurn = {
   blocks: ReplayBlock[]
   bookmarkLabel?: string
@@ -61,7 +33,6 @@ export type PreviewTurn = {
   timeLabel: string
 }
 
-/** Session payload rendered inside the playback transcript panel. */
 export type ReplaySession = {
   id: string
   provider: string
@@ -73,10 +44,10 @@ export type ReplaySession = {
   turns: PreviewTurn[]
 }
 
-/** Toolbar actions plus replay data needed by the playback transcript view. */
 export type ReplayPanelProps = {
   canExport?: boolean
   isExporting?: boolean
+  layout?: PreparedTranscriptLayout | null
   onExport?: () => void
   session: ReplaySession | null
   visibleCount: number
@@ -87,18 +58,12 @@ export type ReplayPanelProps = {
   onToggleTurnIncluded?: (turnId: string) => void
 }
 
-const roleIconMap: Record<PreviewTurn['role'], typeof MessageSquare> = {
-  user: UserRound,
-  assistant: Bot,
-  system: Sparkles,
-  tool: Wrench,
-}
-
 type PlaybackMode = 'idle' | 'paused' | 'playing'
 
 function ReplayPanel({
   canExport,
   isExporting,
+  layout: externalLayout,
   onExport,
   session,
   visibleCount,
@@ -121,8 +86,13 @@ function ReplayPanel({
   const contentRef = useRef<HTMLDivElement | null>(null)
   const turnRefs = useRef<Record<string, HTMLLIElement | null>>({})
 
+  const layout = useMemo(
+    () => externalLayout ?? (session ? prepareTranscriptLayout(session.turns) : null),
+    [externalLayout, session],
+  )
+
   useEffect(() => {
-    if (!session) {
+    if (!session || !layout) {
       setExpandedBlockIds(new Set())
       setEditingNoteTurnId(null)
       setNoteDraft('')
@@ -132,22 +102,19 @@ function ReplayPanel({
       return
     }
 
-    setExpandedBlockIds(
-      new Set(
-        session.turns.flatMap((turn) =>
-          createReplaySegments(turn.blocks).flatMap((segment) =>
-            getReplaySegmentDefaultOpen(segment) ? getReplaySegmentDisclosureIds(segment) : [],
-          ),
-        ),
-      ),
-    )
-  }, [session?.id])
+    setExpandedBlockIds(collectDefaultOpenIds(layout))
+  }, [layout, session?.id])
 
   const playbackTurns = useMemo(
-    // Hidden turns stay editable in full session list, but playback pacing only
-    // tracks visible turns. This separate map bridges session order to playback order.
-    () => createReplayPlaybackTurns(session?.turns.filter((turn) => !turn.isHidden) ?? []),
-    [session],
+    () => {
+      if (!session || !layout) {
+        return []
+      }
+
+      const visibleTurns = session.turns.filter((turn) => !turn.isHidden)
+      return createPlaybackTurnsFromLayout(visibleTurns, layout)
+    },
+    [session, layout],
   )
   const playbackTurnIndexById = useMemo(
     () => new Map(playbackTurns.map((turn, index) => [turn.turnId, index])),
@@ -183,7 +150,62 @@ function ReplayPanel({
     setNoteDraft(currentTurn.bookmarkLabel ?? '')
   }, [editingNoteTurnId, session])
 
-  const toggleBlock = (blockId: string) => {
+  const displayedTurns = useMemo(() => {
+    if (!session) {
+      return []
+    }
+
+    return session.turns.filter((turn) => {
+      if (playbackStarted && turn.isHidden) {
+        return false
+      }
+
+      const playbackIndex = playbackTurnIndexById.get(turn.id)
+      if (playbackStarted && playbackIndex !== undefined && playbackIndex > playbackTurnIndex) {
+        return false
+      }
+
+      return true
+    })
+  }, [session, playbackStarted, playbackTurnIndex, playbackTurnIndexById])
+
+  const displayedTurnLayouts = useMemo(
+    () => displayedTurns.map((turn) => getRequiredTurnLayout(layout, turn.id)),
+    [displayedTurns, layout],
+  )
+  const activeDisplayedTurnIndex = useMemo(() => {
+    const activeTurnId = playbackTurns[playbackTurnIndex]?.turnId
+    if (!activeTurnId) {
+      return -1
+    }
+
+    return displayedTurns.findIndex((turn) => turn.id === activeTurnId)
+  }, [displayedTurns, playbackTurnIndex, playbackTurns])
+  const virtualizationEnabled = Boolean(session && displayedTurns.length >= VIRTUALIZATION_THRESHOLD)
+  const virtualTranscript = useVirtualTranscript({
+    turnLayouts: displayedTurnLayouts,
+    visibleTurnIds: null,
+    activeTurnIndex: activeDisplayedTurnIndex,
+    enabled: virtualizationEnabled,
+  })
+  const rowOffsets = useMemo(() => {
+    const offsets: number[] = []
+    let top = 0
+
+    for (const row of virtualTranscript.rowHeights) {
+      offsets.push(top)
+      top += row.height
+    }
+
+    return offsets
+  }, [virtualTranscript.rowHeights])
+
+  const setContentNode = useCallback((node: HTMLDivElement | null) => {
+    contentRef.current = node
+    virtualTranscript.containerRef(node)
+  }, [virtualTranscript.containerRef])
+
+  const toggleBlock = useCallback((blockId: string) => {
     setExpandedBlockIds((current) => {
       const next = new Set(current)
       if (next.has(blockId)) {
@@ -193,35 +215,35 @@ function ReplayPanel({
       }
       return next
     })
-  }
+    virtualTranscript.invalidate()
+  }, [virtualTranscript])
 
-  const openNoteEditor = (turn: PreviewTurn) => {
+  const openNoteEditor = useCallback((turn: PreviewTurn) => {
     setEditingNoteTurnId(turn.id)
     setNoteDraft(turn.bookmarkLabel ?? '')
-  }
+  }, [])
 
-  const closeNoteEditor = () => {
+  const closeNoteEditor = useCallback(() => {
     setEditingNoteTurnId(null)
     setNoteDraft('')
-  }
+  }, [])
 
-  const commitNoteEditor = () => {
+  const commitNoteEditor = useCallback(() => {
     if (!editingNoteTurnId || !onBookmarkChange) {
       closeNoteEditor()
       return
     }
 
-    // Note edits commit on blur/Enter so hover-driven controls stay lightweight.
     onBookmarkChange(editingNoteTurnId, noteDraft)
     closeNoteEditor()
-  }
+  }, [closeNoteEditor, editingNoteTurnId, noteDraft, onBookmarkChange])
 
-  const resetPlayback = () => {
+  const resetPlayback = useCallback(() => {
     setPlaybackTurnIndex(0)
     setRevealedUnitIds(new Set())
-  }
+  }, [])
 
-  const stepPlaybackForward = () => {
+  const stepPlaybackForward = useCallback(() => {
     const nextState = getNextPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
     if (!nextState) {
       setPlaybackMode('paused')
@@ -230,9 +252,9 @@ function ReplayPanel({
 
     setPlaybackTurnIndex(nextState.turnIndex)
     setRevealedUnitIds(nextState.revealedUnitIds)
-  }
+  }, [playbackTurnIndex, playbackTurns, revealedUnitIds])
 
-  const stepPlaybackBackward = () => {
+  const stepPlaybackBackward = useCallback(() => {
     const previousState = getPreviousPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
     if (!previousState) {
       resetPlayback()
@@ -241,7 +263,7 @@ function ReplayPanel({
 
     setPlaybackTurnIndex(previousState.turnIndex)
     setRevealedUnitIds(previousState.revealedUnitIds)
-  }
+  }, [playbackTurnIndex, playbackTurns, resetPlayback, revealedUnitIds])
 
   useEffect(() => {
     if (playbackMode !== 'playing') {
@@ -261,7 +283,7 @@ function ReplayPanel({
     return () => {
       window.clearTimeout(timer)
     }
-  }, [playbackMode, playbackSpeed, playbackTurnIndex, playbackTurns, revealedUnitIds])
+  }, [playbackMode, playbackSpeed, playbackTurnIndex, playbackTurns, revealedUnitIds, stepPlaybackForward])
 
   useEffect(() => {
     const content = contentRef.current
@@ -297,30 +319,48 @@ function ReplayPanel({
     }
 
     const target = turnRefs.current[currentTurnId]
-    if (!target) {
-      return
-    }
+    const activeOffset = activeDisplayedTurnIndex >= 0 ? rowOffsets[activeDisplayedTurnIndex] : null
+    const content = contentRef.current
 
     const animationFrame = window.requestAnimationFrame(() => {
-      if (typeof target.scrollIntoView !== 'function') {
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({
+          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
+          block: 'end',
+        })
         return
       }
 
-      target.scrollIntoView({
-        behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
-        block: 'end',
-      })
+      if (content && activeOffset !== null && typeof content.scrollTo === 'function') {
+        const nextTop = Math.max(0, activeOffset - Math.max(0, content.clientHeight - 160))
+        content.scrollTo({
+          behavior: playbackMode === 'playing' ? 'smooth' : 'auto',
+          top: nextTop,
+        })
+      }
     })
 
     return () => {
       window.cancelAnimationFrame(animationFrame)
     }
-  }, [activePlaybackUnitId, playbackMode, playbackStarted, playbackTurnIndex, playbackTurns])
+  }, [
+    activeDisplayedTurnIndex,
+    activePlaybackUnitId,
+    playbackMode,
+    playbackStarted,
+    playbackTurnIndex,
+    playbackTurns,
+    rowOffsets,
+  ])
+
+  const renderedTurnRange = virtualizationEnabled
+    ? displayedTurns.slice(virtualTranscript.visibleRange.startIndex, virtualTranscript.visibleRange.endIndex + 1)
+    : displayedTurns
 
   return (
     <section className="preview-block" aria-live="polite">
       <div
-        ref={contentRef}
+        ref={setContentNode}
         className={`preview-block__content preview-block__content--chat${session ? '' : ' preview-block__content--idle'}`}
       >
         <header className="preview-block__header">
@@ -347,137 +387,52 @@ function ReplayPanel({
               </p>
             </div>
           ) : (
-            <ul className="preview-block__transcript">
-              {session.turns.map((turn) => {
-                if (playbackStarted && turn.isHidden) {
-                  return null
-                }
-
-              const playbackIndex = playbackTurnIndexById.get(turn.id)
-              if (playbackStarted && playbackIndex !== undefined && playbackIndex > playbackTurnIndex) {
-                return null
-              }
-
-               const Icon = roleIconMap[turn.role]
-               const turnTone = getReplayTurnTone(turn)
-               const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < playbackTurnIndex
-               const isPlaybackActive = playbackStarted && playbackIndex === playbackTurnIndex
-               const playbackTurn = playbackIndex === undefined ? undefined : playbackTurns[playbackIndex]
-               // Past turns reveal everything, future turns reveal nothing, active
-               // user turns reveal instantly, active assistant/tool turns reveal unit-by-unit.
-               const turnVisibleUnitIds =
-                 !playbackStarted || playbackTurn === undefined || isPlaybackPast || (isPlaybackActive && turn.role === 'user')
-                   ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
-                  : isPlaybackActive
-                    ? revealedUnitIds
-                    : new Set<string>()
+            <ul
+              className={`preview-block__transcript${virtualizationEnabled ? ' preview-block__transcript--virtual' : ''}`}
+              style={virtualizationEnabled ? { height: virtualTranscript.totalHeight, position: 'relative' } : undefined}
+            >
+              {renderedTurnRange.map((turn, sliceIndex) => {
+                const rowIndex = virtualizationEnabled
+                  ? virtualTranscript.visibleRange.startIndex + sliceIndex
+                  : sliceIndex
+                const playback = getTurnPlaybackState({
+                  activePlaybackUnitId,
+                  playbackStarted,
+                  playbackTurnIndex,
+                  playbackTurnIndexById,
+                  playbackTurns,
+                  revealedUnitIds,
+                  turn,
+                })
 
                 return (
-                  <li
+                  <ReplayTurnRow
                     key={turn.id}
-                    ref={(node) => {
-                      turnRefs.current[turn.id] = node
+                    turn={turn}
+                    turnLayout={displayedTurnLayouts[rowIndex]}
+                    expandedBlockIds={expandedBlockIds}
+                    editingNoteTurnId={editingNoteTurnId}
+                    noteDraft={noteDraft}
+                    playback={playback}
+                    style={virtualizationEnabled ? {
+                      left: 0,
+                      position: 'absolute',
+                      right: 0,
+                      top: rowOffsets[rowIndex] ?? 0,
+                    } : undefined}
+                    onBookmarkDraftChange={setNoteDraft}
+                    onBookmarkSubmit={commitNoteEditor}
+                    onBookmarkCancel={closeNoteEditor}
+                    onOpenBookmark={openNoteEditor}
+                    onToggleBlock={toggleBlock}
+                    onToggleTurnIncluded={onToggleTurnIncluded}
+                    onMeasure={virtualizationEnabled ? (height) => {
+                      virtualTranscript.reportRowHeight(rowIndex, height + ROW_GAP_PX)
+                    } : undefined}
+                    onTurnNode={(turnId, node) => {
+                      turnRefs.current[turnId] = node
                     }}
-                    className={[
-                      'replay-turn',
-                      `replay-turn--${turnTone}`,
-                      turn.isHidden ? 'is-hidden' : '',
-                      isPlaybackPast ? 'is-playback-past' : '',
-                      isPlaybackActive ? 'is-playback-active' : '',
-                    ].filter(Boolean).join(' ')}
-                  >
-                    <div className="replay-turn__icon">
-                      <Icon size={12} strokeWidth={1.8} />
-                    </div>
-                    <div className="replay-turn__meta">
-                      <div className="replay-turn__header">
-                        <div className="replay-turn__top">
-                          <span className="replay-turn__role-label">{formatPreviewRoleLabel(turn.role)}</span>
-                          <span className="replay-turn__summary-inline">{turn.summary}</span>
-                          <div className="replay-turn__controls">
-                            <button
-                              aria-label={turn.bookmarkLabel ? 'Edit bookmark note' : 'Add bookmark note'}
-                              className={`replay-turn__icon-button ${turn.isBookmarked ? 'is-active' : ''}`}
-                              type="button"
-                              onClick={() => openNoteEditor(turn)}
-                            >
-                              <Bookmark size={14} strokeWidth={1.8} />
-                            </button>
-                            <button
-                              aria-label={turn.isHidden ? 'Show turn in preview and export' : 'Hide turn from preview and export'}
-                              className={`replay-turn__icon-button ${turn.isHidden ? 'is-active' : ''}`}
-                              type="button"
-                              onClick={() => onToggleTurnIncluded?.(turn.id)}
-                            >
-                              {turn.isHidden ? <Eye size={14} strokeWidth={1.8} /> : <EyeOff size={14} strokeWidth={1.8} />}
-                            </button>
-                          </div>
-                        </div>
-                        {turn.timeLabel ? <p className="replay-turn__timestamp">{turn.timeLabel}</p> : null}
-                        {editingNoteTurnId === turn.id ? (
-                          <div className="replay-turn__note-editor">
-                            <input
-                              aria-label={`Bookmark note for ${turn.id}`}
-                              autoFocus
-                              className="replay-turn__note-input"
-                              placeholder="Add note for export bookmark"
-                              value={noteDraft}
-                              onBlur={commitNoteEditor}
-                              onChange={(event) => setNoteDraft(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault()
-                                  commitNoteEditor()
-                                }
-
-                                if (event.key === 'Escape') {
-                                  event.preventDefault()
-                                  closeNoteEditor()
-                                }
-                              }}
-                            />
-                          </div>
-                        ) : turn.bookmarkLabel ? (
-                          <button
-                            className="replay-turn__note-pill"
-                            type="button"
-                            onClick={() => openNoteEditor(turn)}
-                          >
-                            <Bookmark size={12} strokeWidth={1.8} />
-                            {turn.bookmarkLabel}
-                          </button>
-                        ) : null}
-                      </div>
-                      {turn.isHidden ? (
-                        <div className="replay-turn__collapsed-preview">
-                          <span className="replay-turn__collapsed-label">Hidden from preview + export</span>
-                          <p className="replay-turn__collapsed-text">{turn.previewText ?? turn.summary}</p>
-                        </div>
-                      ) : (
-                        <div className="replay-turn__body">
-                          {createReplaySegments(turn.blocks).map((segment) => (
-                            <ReplaySegmentDisclosure
-                              key={segment.id}
-                              expandedBlockIds={expandedBlockIds}
-                              playback={
-                                playbackStarted && playbackIndex !== undefined
-                                  ? {
-                                      activeUnitId: isPlaybackActive ? activePlaybackUnitId : null,
-                                      animate: isPlaybackActive,
-                                      revealAll: isPlaybackPast || (isPlaybackActive && turn.role === 'user'),
-                                      visibleUnitIds: turnVisibleUnitIds,
-                                    }
-                                  : undefined
-                              }
-                              segment={segment}
-                              onToggle={toggleBlock}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      {turn.isBookmarked ? <span className="replay-turn__bookmark">bookmarked</span> : null}
-                    </div>
-                  </li>
+                  />
                 )
               })}
             </ul>
@@ -592,205 +547,58 @@ function formatTurnCount(value: number): string {
   return `${value} ${value === 1 ? 'turn' : 'turns'}`
 }
 
-function formatPreviewRoleLabel(role: PreviewTurnRole): string {
-  return `${role}:`.toUpperCase()
-}
-
-function ReplaySegmentDisclosure({
-  expandedBlockIds,
-  playback,
-  onToggle,
-  segment,
-}: {
-  expandedBlockIds: ReadonlySet<string>
-  playback?: {
-    activeUnitId: string | null
-    animate: boolean
-    revealAll: boolean
-    visibleUnitIds: ReadonlySet<string>
-  }
-  onToggle: (id: string) => void
-  segment: ReplaySegment
-}) {
-  if (segment.type === 'block') {
-    if (segment.block.type !== 'thinking' && !(segment.block.type === 'meta' && segment.block.appearance === 'disclosure')) {
-      return (
-        <ReplayPlaybackUnit playback={playback} unitId={segment.block.id}>
-          <ReplayInlineBlock block={segment.block} />
-        </ReplayPlaybackUnit>
-      )
-    }
-
-    return (
-      <ReplayPlaybackUnit playback={playback} unitId={segment.block.id}>
-        <ReplayBlockDisclosure
-          block={segment.block}
-          isOpen={expandedBlockIds.has(segment.block.id)}
-          onToggle={() => onToggle(segment.block.id)}
-        />
-      </ReplayPlaybackUnit>
-    )
-  }
-
-  if (!shouldGroupReplayToolRun(segment)) {
-    return (
-      <div className="replay-tool-run">
-        {segment.blocks.map((block) => (
-          <ReplayPlaybackUnit key={block.id} playback={playback} unitId={block.id}>
-            <ReplayBlockDisclosure
-              block={block}
-              isOpen={expandedBlockIds.has(block.id)}
-              onToggle={() => onToggle(block.id)}
-            />
-          </ReplayPlaybackUnit>
-        ))}
-      </div>
-    )
-  }
-
-  const isOpen = expandedBlockIds.has(segment.id)
-  const visibleBlocks = getVisibleReplayToolRunBlocks(segment, playback)
-  if (visibleBlocks.length === 0) {
-    return null
-  }
-
-  const visibleSegment =
-    visibleBlocks.length === segment.blocks.length
-      ? segment
-      : {
-          ...segment,
-          blocks: visibleBlocks,
-        }
-  const summaryMeta = getReplayToolRunSummaryMeta(visibleSegment)
-
-  return (
-    <details className="replay-tool-group" open={isOpen}>
-      <summary
-        className="replay-tool-group__summary"
-        onClick={(event) => {
-          event.preventDefault()
-          onToggle(segment.id)
-        }}
-      >
-        <ChevronDown size={12} className={`replay-tool-group__chevron ${isOpen ? 'is-open' : ''}`} />
-        <span className="replay-tool-group__label">{getReplayToolRunLabel(visibleSegment)}</span>
-        {summaryMeta ? <span className="replay-tool-group__meta">{summaryMeta}</span> : null}
-      </summary>
-      <div className="replay-tool-group__content">
-        {visibleBlocks.map((block) => (
-          <ReplayPlaybackUnit key={block.id} playback={playback} unitId={block.id}>
-            <ReplayBlockDisclosure
-              block={block}
-              isOpen={expandedBlockIds.has(block.id)}
-              onToggle={() => onToggle(block.id)}
-            />
-          </ReplayPlaybackUnit>
-        ))}
-      </div>
-    </details>
-  )
-}
-
-function ReplayPlaybackUnit({
-  children,
-  playback,
-  unitId,
-}: {
-  children: React.ReactNode
-  playback?: {
-    activeUnitId: string | null
-    animate: boolean
-    revealAll: boolean
-    visibleUnitIds: ReadonlySet<string>
-  }
-  unitId: string
-}) {
-  if (playback && !playback.revealAll && !playback.visibleUnitIds.has(unitId)) {
-    return null
-  }
-
-  const isActive = playback?.activeUnitId === unitId
-  const shouldAnimate = Boolean(playback?.animate && playback && playback.visibleUnitIds.has(unitId))
-
-  return (
-    <div
-      className={[
-        'replay-playback-unit',
-        shouldAnimate ? 'is-revealed' : '',
-        isActive ? 'is-active' : '',
-      ].filter(Boolean).join(' ')}
-    >
-      {children}
-    </div>
-  )
-}
-
-function ReplayInlineBlock({ block }: { block: ReplayRenderableTextBlock }) {
-  return (
-    <div className={`replay-inline-block replay-inline-block--${block.type}`}>
-      {block.type !== 'meta' && block.title ? <div className="replay-inline-block__title">{block.title}</div> : null}
-      <div
-        className="replay-inline-block__content"
-        dangerouslySetInnerHTML={{ __html: renderReplayBlockBodyHtml(block) }}
-      />
-    </div>
-  )
-}
-
-function ReplayBlockDisclosure({
-  block,
-  isOpen,
-  onToggle,
-}: {
-  block: ReplayRenderableBlock
-  isOpen: boolean
-  onToggle: () => void
-}) {
-  const summaryMeta = getReplayBlockSummaryMeta(block)
-  const contentClassName =
-    block.type === 'tool'
-      ? 'replay-disclosure__content replay-disclosure__content--tool'
-      : block.type === 'meta'
-        ? 'replay-disclosure__content replay-disclosure__content--meta'
-      : 'replay-disclosure__content'
-
-  return (
-    <details className={`replay-disclosure replay-disclosure--${block.type}`} open={isOpen}>
-      <summary
-        className="replay-disclosure__summary"
-        onClick={(event) => {
-          event.preventDefault()
-          onToggle()
-        }}
-      >
-        <ChevronDown size={12} className={`replay-disclosure__chevron ${isOpen ? 'is-open' : ''}`} />
-        <span className="replay-disclosure__summary-label">{getReplayBlockLabel(block)}</span>
-        {summaryMeta ? <span className="replay-disclosure__summary-meta">{summaryMeta}</span> : null}
-      </summary>
-      <div
-        className={contentClassName}
-        dangerouslySetInnerHTML={{ __html: renderReplayBlockBodyHtml(block) }}
-      />
-    </details>
-  )
-}
-
-function getVisibleReplayToolRunBlocks(
-  segment: Extract<ReplaySegment, { type: 'tool-run' }>,
-  playback:
-    | {
-        activeUnitId: string | null
-        animate: boolean
-        revealAll: boolean
-        visibleUnitIds: ReadonlySet<string>
-      }
-    | undefined,
+function getRequiredTurnLayout(
+  layout: PreparedTranscriptLayout | null,
+  turnId: string,
 ) {
-  if (!playback || playback.revealAll) {
-    return segment.blocks
+  const turnLayout = layout?.turnLayoutById.get(turnId)
+  if (!turnLayout) {
+    throw new Error(`Missing prepared transcript layout for turn ${turnId}`)
   }
 
-  return segment.blocks.filter((block) => playback.visibleUnitIds.has(block.id))
+  return turnLayout
+}
+
+function getTurnPlaybackState({
+  activePlaybackUnitId,
+  playbackStarted,
+  playbackTurnIndex,
+  playbackTurnIndexById,
+  playbackTurns,
+  revealedUnitIds,
+  turn,
+}: {
+  activePlaybackUnitId: string | null
+  playbackStarted: boolean
+  playbackTurnIndex: number
+  playbackTurnIndexById: ReadonlyMap<string, number>
+  playbackTurns: ReturnType<typeof createPlaybackTurnsFromLayout>
+  revealedUnitIds: ReadonlySet<string>
+  turn: PreviewTurn
+}): ReplayTurnPlaybackState | undefined {
+  const playbackIndex = playbackTurnIndexById.get(turn.id)
+  if (!playbackStarted || playbackIndex === undefined) {
+    return undefined
+  }
+
+  const playbackTurn = playbackTurns[playbackIndex]
+  const isPast = playbackIndex < playbackTurnIndex
+  const isActive = playbackIndex === playbackTurnIndex
+  const revealAll = isPast || (isActive && turn.role === 'user')
+  const visibleUnitIds = revealAll
+    ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
+    : isActive
+      ? revealedUnitIds
+      : new Set<string>()
+
+  return {
+    activeUnitId: isActive ? activePlaybackUnitId : null,
+    animate: isActive,
+    isActive,
+    isPast,
+    revealAll,
+    visibleUnitIds,
+  }
 }
 
 export { ReplayPanel }

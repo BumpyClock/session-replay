@@ -15,33 +15,25 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   MaterializedReplaySession,
-  ReplayBlock,
   ReplayRenderOptions,
   ReplayRole,
   ReplayTurn,
 } from '../../src/lib/api/contracts'
-import { renderReplayBlockBodyHtml } from '../../src/lib/markdown/render'
 import {
-  getReplayBlockDefaultOpen,
-  getReplayBlockLabel,
-  getReplayBlockSummaryMeta,
-  getReplayTurnTone,
-  summarizeReplayTurn,
-} from '../../src/lib/replay/blocks'
-import {
-  createReplayPlaybackTurns,
   DEFAULT_PLAYBACK_SPEED,
   PLAYBACK_TURN_DWELL_MS,
   PLAYBACK_SPEEDS,
-  type ReplayPlaybackTurnPlan,
 } from '../../src/lib/replay/playback'
-import {
-  createReplaySegments,
-  getReplayToolRunLabel,
-  getReplayToolRunSummaryMeta,
-  shouldGroupReplayToolRun,
-} from '../../src/lib/replay/segments'
 import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../src/lib/replay/context-blocks'
+import {
+  createPlaybackTurnsFromLayout,
+  prepareTranscriptLayout,
+} from '../../src/lib/replay/transcript-layout'
+import type {
+  PreparedBlockLayout,
+  PreparedTurnLayout,
+} from '../../src/lib/replay/transcript-layout-types'
+import { buildExportPayload, estimateTurnHeight, TURN_GAP_PX } from './export-payload'
 
 const roleIconMap = {
   assistant: Bot,
@@ -64,6 +56,10 @@ type RenderableReplaySession = MaterializedReplaySession & {
 
 /**
  * Renders a self-contained replay document that mirrors the in-editor playback preview.
+ *
+ * Turn content is serialized into a JSON payload and materialized on demand
+ * by a client-side virtual list, so the initial DOM never contains the full
+ * transcript regardless of session size.
  */
 export function renderReplayDocument(
   session: MaterializedReplaySession,
@@ -71,7 +67,29 @@ export function renderReplayDocument(
 ): string {
   const { initialTurnIndex, session: replay } = createRenderableSession(session, options)
   const displayTitle = escapeHtml(options.exportTitle ?? replay.title)
-  const playbackTurns = createReplayPlaybackTurns(replay.turns)
+  const layout = prepareTranscriptLayout(replay.turns)
+  const playbackTurns = createPlaybackTurnsFromLayout(replay.turns, layout)
+
+  const turnHtmlById = new Map<string, string>()
+  const turnHeightById = new Map<string, number>()
+
+  for (const turn of replay.turns) {
+    const turnLayout = getRequiredTurnLayout(layout.turnLayoutById, turn.id)
+    const bookmarkLabel = replay.bookmarksByTurnIndex.get(turn.index)
+    turnHtmlById.set(turn.id, renderReplayTurnCard(turn, turnLayout, bookmarkLabel, options))
+    turnHeightById.set(turn.id, estimateTurnHeight(turnLayout, bookmarkLabel, options))
+  }
+
+  const payload = buildExportPayload(
+    replay.turns,
+    turnHtmlById,
+    turnHeightById,
+    playbackTurns,
+    initialTurnIndex,
+  )
+
+  // Escape closing script tags in JSON to prevent premature tag termination.
+  const payloadJson = JSON.stringify(payload).replace(/<\//g, '<\\/')
   const playbackSpeed = DEFAULT_PLAYBACK_SPEED
 
   return `<!doctype html>
@@ -107,9 +125,7 @@ export function renderReplayDocument(
               <p>No turns available in this export.</p>
               <p class="preview-block__hint">Adjust export filters in editor mode if you expected more transcript content.</p>
             </div>`
-                : `<ul class="preview-block__transcript">
-              ${replay.turns.map((turn) => renderReplayTurnCard(turn, replay.bookmarksByTurnIndex.get(turn.index), options)).join('')}
-            </ul>`
+                : '<ul class="preview-block__transcript preview-block__transcript--virtual" data-virtual-transcript></ul>'
             }
           </div>
           <div class="preview-block__dock" role="toolbar" aria-label="Playback controls">
@@ -152,11 +168,10 @@ export function renderReplayDocument(
         </section>
       </main>
     </div>
+    <script type="application/json" id="replay-payload">${payloadJson}</script>
     <script>${buildRuntime({
-      initialTurnIndex,
       pauseIcon: PAUSE_ICON,
       playIcon: PLAY_ICON,
-      playbackTurns,
       speeds: [...PLAYBACK_SPEEDS],
     })}</script>
   </body>
@@ -265,12 +280,17 @@ function renderSessionMeta(session: Pick<RenderableReplaySession, 'project' | 's
 
 function renderReplayTurnCard(
   turn: ReplayTurn,
+  turnLayout: PreparedTurnLayout | undefined,
   bookmarkLabel: string | undefined,
   options: ReplayRenderOptions,
 ): string {
+  if (!turnLayout) {
+    throw new Error(`Missing prepared transcript layout for turn ${turn.id}`)
+  }
+
   const Icon = roleIconMap[turn.role]
-  const tone = getReplayTurnTone(turn)
-  const summary = summarizeReplayTurn(turn)
+  const tone = turnLayout.tone
+  const summary = turnLayout.summary
   const timeLabel = formatTimeLabel(turn.timestamp)
   const bookmark = bookmarkLabel
     ? `<div class="replay-turn__note-pill">
@@ -301,51 +321,81 @@ function renderReplayTurnCard(
         ${bookmark}
       </div>
       <div class="replay-turn__body">
-        ${renderReplayTurnSegments(turn.blocks, options)}
+        ${renderReplayTurnSegments(turnLayout, options)}
       </div>
       ${bookmarkLabel ? '<span class="replay-turn__bookmark">bookmarked</span>' : ''}
     </div>
   </li>`
 }
 
-function renderReplayTurnSegments(blocks: readonly ReplayBlock[], options: ReplayRenderOptions): string {
-  return createReplaySegments(blocks)
+function renderReplayTurnSegments(turnLayout: PreparedTurnLayout | undefined, options: ReplayRenderOptions): string {
+  if (!turnLayout) {
+    return ''
+  }
+
+  return turnLayout.segments
     .map((segment) => {
       if (segment.type === 'block') {
-        if (segment.block.type !== 'thinking' && !(segment.block.type === 'meta' && segment.block.appearance === 'disclosure')) {
+        const blockMeta = getRequiredBlockLayout(turnLayout.blockMetaById, segment.block.id)
+        if (!blockMeta.isDisclosure) {
           return renderReplayPlaybackUnit(
             segment.block.id,
-            renderReplayInlineBlock(segment.block),
+            renderReplayInlineBlock(segment.block, turnLayout.blockHtml),
           )
         }
 
         return renderReplayPlaybackUnit(
           segment.block.id,
-          renderReplayBlockDisclosure(segment.block, options),
+          renderReplayBlockDisclosure(segment.block, blockMeta, turnLayout.blockHtml, options),
         )
       }
 
-      if (!shouldGroupReplayToolRun(segment)) {
+      const toolRunMeta = turnLayout.toolRunMetaById.get(segment.id)
+      if (!toolRunMeta) {
+        throw new Error(`Missing prepared tool run layout for segment ${segment.id}`)
+      }
+
+      if (!toolRunMeta.grouped) {
         return `<div class="replay-tool-run">
           ${segment.blocks
-            .map((block) => renderReplayPlaybackUnit(block.id, renderReplayBlockDisclosure(block, options)))
+            .map((block) =>
+              renderReplayPlaybackUnit(
+                block.id,
+                renderReplayBlockDisclosure(
+                  block,
+                  getRequiredBlockLayout(turnLayout.blockMetaById, block.id),
+                  turnLayout.blockHtml,
+                  options,
+                ),
+              ),
+            )
             .join('')}
         </div>`
       }
 
-      const summaryMeta = getReplayToolRunSummaryMeta(segment)
+      const summaryMeta = toolRunMeta.summaryMeta
       return `<details
         class="replay-tool-group"
         data-replay-group-ids="${escapeHtml(segment.blocks.map((block) => block.id).join(','))}"
       >
         <summary class="replay-tool-group__summary">
           ${CHEVRON_ICON}
-          <span class="replay-tool-group__label">${escapeHtml(getReplayToolRunLabel(segment))}</span>
+          <span class="replay-tool-group__label">${escapeHtml(toolRunMeta.label)}</span>
           ${summaryMeta ? `<span class="replay-tool-group__meta">${escapeHtml(summaryMeta)}</span>` : ''}
         </summary>
         <div class="replay-tool-group__content">
           ${segment.blocks
-            .map((block) => renderReplayPlaybackUnit(block.id, renderReplayBlockDisclosure(block, options)))
+            .map((block) =>
+              renderReplayPlaybackUnit(
+                block.id,
+                renderReplayBlockDisclosure(
+                  block,
+                  getRequiredBlockLayout(turnLayout.blockMetaById, block.id),
+                  turnLayout.blockHtml,
+                  options,
+                ),
+              ),
+            )
             .join('')}
         </div>
       </details>`
@@ -357,7 +407,7 @@ function renderReplayPlaybackUnit(unitId: string, content: string): string {
   return `<div class="replay-playback-unit" data-replay-unit-id="${escapeHtml(unitId)}">${content}</div>`
 }
 
-function renderReplayInlineBlock(block: ReplayRenderableTextBlock): string {
+function renderReplayInlineBlock(block: ReplayRenderableTextBlock, blockHtml: ReadonlyMap<string, string>): string {
   const title =
     block.type !== 'meta' && 'title' in block && block.title
       ? `<div class="replay-inline-block__title">${escapeHtml(block.title)}</div>`
@@ -365,41 +415,64 @@ function renderReplayInlineBlock(block: ReplayRenderableTextBlock): string {
 
   return `<div class="replay-inline-block replay-inline-block--${escapeHtml(block.type)}">
     ${title}
-    <div class="replay-inline-block__content">${renderReplayBlockBodyHtml(block)}</div>
+    <div class="replay-inline-block__content">${blockHtml.get(block.id) ?? ''}</div>
   </div>`
 }
 
 function renderReplayBlockDisclosure(
   block: ReplayRenderableBlock,
+  meta: PreparedBlockLayout,
+  blockHtml: ReadonlyMap<string, string>,
   options: ReplayRenderOptions,
 ): string {
-  const summaryMeta = getReplayBlockSummaryMeta(block)
-  const open = getReplayBlockOpenState(block, options)
+  const open = getReplayBlockOpenState(meta, block, options)
   const replayKind =
     block.type === 'thinking' ? ' data-replay-kind="thinking"' : block.type === 'tool' ? ' data-replay-kind="tool"' : ''
-  const contentClassName =
-    block.type === 'tool'
-      ? 'replay-disclosure__content replay-disclosure__content--tool'
-      : block.type === 'meta'
-        ? 'replay-disclosure__content replay-disclosure__content--meta'
-        : 'replay-disclosure__content'
 
   return `<details class="replay-disclosure replay-disclosure--${escapeHtml(block.type)}"${open ? ' open' : ''}${replayKind}>
     <summary class="replay-disclosure__summary">
       ${CHEVRON_ICON}
-      <span class="replay-disclosure__summary-label">${escapeHtml(getReplayBlockLabel(block))}</span>
-      ${summaryMeta ? `<span class="replay-disclosure__summary-meta">${escapeHtml(summaryMeta)}</span>` : ''}
+      <span class="replay-disclosure__summary-label">${escapeHtml(meta.label)}</span>
+      ${meta.summaryMeta ? `<span class="replay-disclosure__summary-meta">${escapeHtml(meta.summaryMeta)}</span>` : ''}
     </summary>
-    <div class="${contentClassName}">${renderReplayBlockBodyHtml(block)}</div>
+    <div class="${meta.contentClassName}">${blockHtml.get(block.id) ?? ''}</div>
   </details>`
 }
 
-function getReplayBlockOpenState(block: ReplayRenderableBlock, options: ReplayRenderOptions): boolean {
+function getReplayBlockOpenState(
+  meta: PreparedBlockLayout,
+  block: ReplayRenderableBlock,
+  options: ReplayRenderOptions,
+): boolean {
   if (block.type === 'thinking' && (options.revealThinking ?? false)) {
     return true
   }
 
-  return getReplayBlockDefaultOpen(block)
+  return meta.defaultOpen
+}
+
+function getRequiredTurnLayout(
+  turnLayoutById: ReadonlyMap<string, PreparedTurnLayout>,
+  turnId: string,
+): PreparedTurnLayout {
+  const turnLayout = turnLayoutById.get(turnId)
+  if (!turnLayout) {
+    throw new Error(`Missing prepared transcript layout for turn ${turnId}`)
+  }
+
+  return turnLayout
+}
+
+function getRequiredBlockLayout(
+  blockMetaById: ReadonlyMap<string, PreparedBlockLayout>,
+  blockId: string,
+): PreparedBlockLayout {
+  const meta = blockMetaById.get(blockId)
+  if (!meta) {
+    throw new Error(`Missing prepared block layout for block ${blockId}`)
+  }
+
+  return meta
 }
 
 function clampTurnIndex(value: number, turnCount: number): number {
@@ -741,6 +814,18 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.preview-block__transcript--virtual {
+  display: block;
+  position: relative;
+  min-height: 100%;
+}
+
+.preview-block__transcript--virtual > .replay-turn {
+  position: absolute;
+  left: 0;
+  right: 0;
 }
 
 .preview-block__empty {
@@ -1394,48 +1479,69 @@ code {
 }
 
 function buildRuntime({
-  initialTurnIndex,
   pauseIcon,
   playIcon,
-  playbackTurns,
   speeds,
 }: {
-  initialTurnIndex: number
   pauseIcon: string
   playIcon: string
-  playbackTurns: readonly ReplayPlaybackTurnPlan[]
   speeds: readonly number[]
 }): string {
   const defaultSpeedIndex = Math.max(speeds.indexOf(DEFAULT_PLAYBACK_SPEED), 0)
 
-  // Export runtime stays self-contained, but mirrors src/lib/replay/playback.ts so
-  // standalone HTML playback matches editor preview pacing and reveal semantics.
+  // Export runtime stays self-contained. It reads the serialized payload from
+  // a JSON script tag and uses a lightweight virtual list to materialize only
+  // the visible turn rows plus overscan, so the DOM stays small even for
+  // sessions with thousands of turns.
   return `(function () {
-  const playbackTurns = ${JSON.stringify(playbackTurns)};
-  const initialTurnIndex = ${initialTurnIndex};
-  const playIcon = ${JSON.stringify(playIcon)};
-  const pauseIcon = ${JSON.stringify(pauseIcon)};
-  const speeds = ${JSON.stringify(speeds)};
-  const defaultSpeedIndex = ${defaultSpeedIndex};
-  const content = document.querySelector('[data-playback-content]');
-  const turnNodes = Array.from(document.querySelectorAll('.replay-turn'));
-  const playButton = document.querySelector('[data-action="toggle-play"]');
-  const previousButton = document.querySelector('[data-action="prev"]');
-  const nextButton = document.querySelector('[data-action="next"]');
-  const speedButton = document.querySelector('[data-action="speed"]');
-  let mode = 'idle';
-  let speedIndex = defaultSpeedIndex;
-  let turnIndex = 0;
-  let timer = null;
-  let initialScrollDone = false;
-  let visibleUnitIds = new Set();
-  const turnIndexById = new Map(playbackTurns.map((turn, index) => [turn.turnId, index]));
+  var payloadEl = document.getElementById('replay-payload');
+  if (!payloadEl) { return; }
+  var payload = JSON.parse(payloadEl.textContent || '{}');
+  var turns = payload.turns || [];
+  var playbackTurns = payload.playbackTurns || [];
+  var initialTurnIndex = payload.initialTurnIndex || 0;
+  var playIcon = ${JSON.stringify(playIcon)};
+  var pauseIcon = ${JSON.stringify(pauseIcon)};
+  var speeds = ${JSON.stringify(speeds)};
+  var defaultSpeedIndex = ${defaultSpeedIndex};
+  var turnGap = ${TURN_GAP_PX};
+  var overscan = 3;
+  var content = document.querySelector('[data-playback-content]');
+  var virtualRoot = document.querySelector('[data-virtual-transcript]');
+  var playButton = document.querySelector('[data-action="toggle-play"]');
+  var previousButton = document.querySelector('[data-action="prev"]');
+  var nextButton = document.querySelector('[data-action="next"]');
+  var speedButton = document.querySelector('[data-action="speed"]');
+  var mode = 'idle';
+  var speedIndex = defaultSpeedIndex;
+  var turnIndex = 0;
+  var timer = null;
+  var initialScrollDone = false;
+  var scrollFrame = null;
+  var visibleUnitIds = new Set();
+  var renderedRange = { start: -1, end: -1 };
+  var turnIndexById = {};
+  for (var i = 0; i < playbackTurns.length; i++) {
+    turnIndexById[playbackTurns[i].turnId] = i;
+  }
+
+  var rowHeights = turns.map(function (t) { return t.estimatedHeight; });
+  var rowOffsets = [];
+  var totalHeight = 0;
+
+  function computeOffsets() {
+    rowOffsets = [];
+    var offset = 0;
+    for (var idx = 0; idx < rowHeights.length; idx++) {
+      rowOffsets.push(offset);
+      offset += rowHeights[idx] + turnGap;
+    }
+    totalHeight = rowHeights.length > 0 ? offset - turnGap : 0;
+  }
+  computeOffsets();
 
   function clearTimer() {
-    if (timer !== null) {
-      window.clearTimeout(timer);
-      timer = null;
-    }
+    if (timer !== null) { window.clearTimeout(timer); timer = null; }
   }
 
   function resetPlayback() {
@@ -1446,182 +1552,208 @@ function buildRuntime({
   function playbackComplete() {
     return playbackTurns.length > 0
       && turnIndex >= playbackTurns.length - 1
-      && playbackTurns.every((turn) => turn.units.every((unit) => visibleUnitIds.has(unit.id)));
+      && playbackTurns.every(function (t) { return t.units.every(function (u) { return visibleUnitIds.has(u.id); }); });
   }
 
   function playbackCanStepBackward() {
-    const activeTurn = playbackTurns[turnIndex];
+    var activeTurn = playbackTurns[turnIndex];
     return playbackTurns.length > 0 && Boolean(
-      turnIndex > 0 || (activeTurn && activeTurn.units.some((unit) => visibleUnitIds.has(unit.id)))
+      turnIndex > 0 || (activeTurn && activeTurn.units.some(function (u) { return visibleUnitIds.has(u.id); }))
     );
   }
 
   function getActivePlaybackUnitId(turn) {
-    if (!turn) {
-      return null;
-    }
-
-    for (let index = turn.units.length - 1; index >= 0; index -= 1) {
-      const candidate = turn.units[index];
-      if (candidate && visibleUnitIds.has(candidate.id)) {
-        return candidate.id;
+    if (!turn) { return null; }
+    for (var idx = turn.units.length - 1; idx >= 0; idx--) {
+      if (turn.units[idx] && visibleUnitIds.has(turn.units[idx].id)) {
+        return turn.units[idx].id;
       }
     }
-
     return null;
   }
 
   function getNextPlaybackDelay() {
-    const currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) {
-      return null;
-    }
-
-    const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id));
+    var currentTurn = playbackTurns[turnIndex];
+    if (!currentTurn) { return null; }
+    var nextUnit = currentTurn.units.find(function (u) { return !visibleUnitIds.has(u.id); });
     if (nextUnit) {
       return Math.max(60, Math.round(nextUnit.delayMs / (speeds[speedIndex] || 1)));
     }
-
     if (turnIndex < playbackTurns.length - 1) {
       return Math.max(120, Math.round(${PLAYBACK_TURN_DWELL_MS} / (speeds[speedIndex] || 1)));
     }
-
     return null;
   }
 
   function getNextPlaybackState() {
-    const currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) {
-      return null;
-    }
-
-    const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id));
+    var currentTurn = playbackTurns[turnIndex];
+    if (!currentTurn) { return null; }
+    var nextUnit = currentTurn.units.find(function (u) { return !visibleUnitIds.has(u.id); });
     if (nextUnit) {
-      const nextVisible = new Set(visibleUnitIds);
-      nextVisible.add(nextUnit.id);
-      return { revealedUnitIds: nextVisible, turnIndex };
+      var next = new Set(visibleUnitIds);
+      next.add(nextUnit.id);
+      return { revealedUnitIds: next, turnIndex: turnIndex };
     }
-
     if (turnIndex < playbackTurns.length - 1) {
       return { revealedUnitIds: new Set(visibleUnitIds), turnIndex: turnIndex + 1 };
     }
-
     return null;
   }
 
   function getPreviousPlaybackState() {
-    const currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) {
-      return null;
-    }
-
-    for (let index = currentTurn.units.length - 1; index >= 0; index -= 1) {
-      const unit = currentTurn.units[index];
+    var currentTurn = playbackTurns[turnIndex];
+    if (!currentTurn) { return null; }
+    for (var idx = currentTurn.units.length - 1; idx >= 0; idx--) {
+      var unit = currentTurn.units[idx];
       if (unit && visibleUnitIds.has(unit.id)) {
-        const nextVisible = new Set(visibleUnitIds);
-        nextVisible.delete(unit.id);
-        return { revealedUnitIds: nextVisible, turnIndex };
+        var prev = new Set(visibleUnitIds);
+        prev.delete(unit.id);
+        return { revealedUnitIds: prev, turnIndex: turnIndex };
       }
     }
-
     if (turnIndex > 0) {
       return { revealedUnitIds: new Set(visibleUnitIds), turnIndex: turnIndex - 1 };
     }
-
     return null;
   }
 
+  function shouldDisplayTurn(idx) {
+    return mode === 'idle' || idx <= turnIndex;
+  }
+
+  function getEffectiveTurnCount() {
+    if (mode === 'idle') { return turns.length; }
+    return Math.min(turnIndex + 1, turns.length);
+  }
+
+  function getEffectiveTotalHeight() {
+    var count = getEffectiveTurnCount();
+    if (count === 0) { return 0; }
+    return rowOffsets[count - 1] + rowHeights[count - 1];
+  }
+
+  function findVisibleRange(scrollTop, viewportHeight) {
+    var count = getEffectiveTurnCount();
+    if (count === 0) { return { start: 0, end: -1 }; }
+    var lo = 0;
+    var hi = count - 1;
+    while (lo < hi) {
+      var mid = (lo + hi) >>> 1;
+      if (rowOffsets[mid] + rowHeights[mid] <= scrollTop) { lo = mid + 1; }
+      else { hi = mid; }
+    }
+    var startIdx = lo;
+    var endIdx = startIdx;
+    while (endIdx < count - 1 && rowOffsets[endIdx] < scrollTop + viewportHeight) {
+      endIdx++;
+    }
+    startIdx = Math.max(0, startIdx - overscan);
+    endIdx = Math.min(count - 1, endIdx + overscan);
+    return { start: startIdx, end: endIdx };
+  }
+
+  function injectRowPosition(html, top) {
+    return html.replace('<li ', '<li style="left:0;position:absolute;right:0;top:' + top + 'px;" ');
+  }
+
+  function renderWindow() {
+    if (!virtualRoot || !content) { return; }
+    var effectiveHeight = getEffectiveTotalHeight();
+    var scrollTop = content.scrollTop;
+    var viewportHeight = content.clientHeight || window.innerHeight || 0;
+    var range = findVisibleRange(scrollTop, viewportHeight);
+    if (range.start === renderedRange.start && range.end === renderedRange.end && virtualRoot.style.height === effectiveHeight + 'px') {
+      return;
+    }
+    var rows = [];
+    for (var idx = range.start; idx <= range.end; idx++) {
+      if (!shouldDisplayTurn(idx)) { continue; }
+      rows.push(injectRowPosition(turns[idx].html, rowOffsets[idx] || 0));
+    }
+    virtualRoot.style.height = effectiveHeight + 'px';
+    virtualRoot.innerHTML = rows.join('');
+    renderedRange = { start: range.start, end: range.end };
+  }
+
   function syncTurnUnits(node, playbackIndex) {
-    const playbackStarted = mode !== 'idle';
-    const playbackTurn = playbackIndex === undefined ? undefined : playbackTurns[playbackIndex];
-    const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < turnIndex;
-    const isPlaybackActive = playbackStarted && playbackIndex === turnIndex;
-    const revealAll = !playbackStarted || !playbackTurn || isPlaybackPast || (isPlaybackActive && playbackTurn.role === 'user');
-    const turnVisibleUnitIds = revealAll
-      ? new Set((playbackTurn ? playbackTurn.units : []).map((unit) => unit.id))
+    var playbackStarted = mode !== 'idle';
+    var playbackTurn = playbackIndex !== undefined ? playbackTurns[playbackIndex] : undefined;
+    var isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < turnIndex;
+    var isPlaybackActive = playbackStarted && playbackIndex === turnIndex;
+    var revealAll = !playbackStarted || !playbackTurn || isPlaybackPast || (isPlaybackActive && playbackTurn.role === 'user');
+    var turnVisibleUnitIds = revealAll
+      ? new Set((playbackTurn ? playbackTurn.units : []).map(function (u) { return u.id; }))
       : isPlaybackActive
         ? new Set(visibleUnitIds)
         : new Set();
-    const activeUnitId = getActivePlaybackUnitId(playbackTurns[turnIndex]);
+    var activeUnitId = getActivePlaybackUnitId(playbackTurns[turnIndex]);
 
-    node.querySelectorAll('.replay-playback-unit').forEach((unitNode) => {
-      const unitId = unitNode.dataset.replayUnitId || '';
-      const isVisible = revealAll || turnVisibleUnitIds.has(unitId);
+    node.querySelectorAll('.replay-playback-unit').forEach(function (unitNode) {
+      var unitId = unitNode.dataset.replayUnitId || '';
+      var isVisible = revealAll || turnVisibleUnitIds.has(unitId);
       unitNode.hidden = !isVisible;
       unitNode.classList.toggle('is-active', Boolean(isPlaybackActive && activeUnitId === unitId));
       unitNode.classList.toggle('is-revealed', Boolean(isPlaybackActive && turnVisibleUnitIds.has(unitId)));
     });
 
-    node.querySelectorAll('[data-replay-group-ids]').forEach((groupNode) => {
-      const ids = (groupNode.dataset.replayGroupIds || '').split(',').filter(Boolean);
-      const shouldHide = !revealAll && ids.every((id) => !turnVisibleUnitIds.has(id));
+    node.querySelectorAll('[data-replay-group-ids]').forEach(function (groupNode) {
+      var ids = (groupNode.dataset.replayGroupIds || '').split(',').filter(Boolean);
+      var shouldHide = !revealAll && ids.every(function (id) { return !turnVisibleUnitIds.has(id); });
       groupNode.hidden = shouldHide;
     });
   }
 
   function sync() {
-    const playbackStarted = mode !== 'idle';
-    const activeTurnId = playbackTurns[turnIndex] ? playbackTurns[turnIndex].turnId : null;
+    var playbackStarted = mode !== 'idle';
+    var activeTurnId = playbackTurns[turnIndex] ? playbackTurns[turnIndex].turnId : null;
 
-    turnNodes.forEach((node) => {
-      const playbackIndex = turnIndexById.get(node.dataset.turnId || '');
-      const isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < turnIndex;
-      const isPlaybackActive = playbackStarted && playbackIndex === turnIndex;
-      node.hidden = Boolean(playbackStarted && playbackIndex !== undefined && playbackIndex > turnIndex);
-      node.classList.toggle('is-playback-past', isPlaybackPast);
-      node.classList.toggle('is-playback-active', isPlaybackActive);
-      syncTurnUnits(node, playbackIndex);
+    renderWindow();
+
+    var turnNodes = virtualRoot ? Array.from(virtualRoot.querySelectorAll('.replay-turn')) : [];
+    turnNodes.forEach(function (node) {
+      var pbIdx = turnIndexById[node.dataset.turnId || ''];
+      var isPast = playbackStarted && pbIdx !== undefined && pbIdx < turnIndex;
+      var isActive = playbackStarted && pbIdx === turnIndex;
+      node.classList.toggle('is-playback-past', isPast);
+      node.classList.toggle('is-playback-active', isActive);
+      syncTurnUnits(node, pbIdx);
     });
 
     if (playButton) {
-      const isPlaying = mode === 'playing';
+      var isPlaying = mode === 'playing';
       playButton.innerHTML = isPlaying ? pauseIcon : playIcon;
       playButton.setAttribute('aria-label', isPlaying ? 'Pause playback' : 'Play transcript');
       playButton.classList.toggle('preview-block__action--active', isPlaying);
       playButton.disabled = playbackTurns.length === 0;
     }
-
-    if (previousButton) {
-      previousButton.disabled = !playbackCanStepBackward();
-    }
-
-    if (nextButton) {
-      nextButton.disabled = playbackTurns.length === 0;
-    }
-
+    if (previousButton) { previousButton.disabled = !playbackCanStepBackward(); }
+    if (nextButton) { nextButton.disabled = playbackTurns.length === 0; }
     if (speedButton) {
-      const speed = speeds[speedIndex] || 1;
+      var speed = speeds[speedIndex] || 1;
       speedButton.textContent = speed + 'x';
       speedButton.setAttribute('aria-label', 'Playback speed ' + speed + 'x');
     }
 
     window.requestAnimationFrame(function () {
-      const initialNode = turnNodes[initialTurnIndex];
-      if (!initialScrollDone && initialNode && typeof initialNode.scrollIntoView === 'function') {
-        initialNode.scrollIntoView({ behavior: 'auto', block: 'center' });
+      if (!content) { return; }
+
+      if (!initialScrollDone) {
+        var initIdx = Math.min(initialTurnIndex, Math.max(0, rowOffsets.length - 1));
+        var initOffset = rowOffsets[initIdx] || 0;
+        content.scrollTo({ behavior: 'auto', top: Math.max(0, initOffset - Math.max(0, content.clientHeight - 160)) });
         initialScrollDone = true;
-      }
-
-      if (!playbackStarted) {
+        renderWindow();
         return;
       }
 
-      const activeNode = activeTurnId
-        ? turnNodes.find((node) => node.dataset.turnId === activeTurnId && !node.hidden)
-        : null;
+      if (!playbackStarted) { return; }
 
-      if (activeNode && typeof activeNode.scrollIntoView === 'function') {
-        activeNode.scrollIntoView({
-          behavior: mode === 'playing' ? 'smooth' : 'auto',
-          block: 'end',
-        });
-        return;
-      }
-
-      if (content && typeof content.scrollTo === 'function') {
+      var activeIndex = activeTurnId !== null ? turnIndexById[activeTurnId] : undefined;
+      if (activeIndex !== undefined) {
+        var activeOffset = rowOffsets[activeIndex] || 0;
         content.scrollTo({
           behavior: mode === 'playing' ? 'smooth' : 'auto',
-          top: content.scrollHeight,
+          top: Math.max(0, activeOffset - Math.max(0, content.clientHeight - 160)),
         });
       }
     });
@@ -1629,25 +1761,12 @@ function buildRuntime({
 
   function schedulePlayback() {
     clearTimer();
-    if (mode !== 'playing') {
-      return;
-    }
-
-    const delayMs = getNextPlaybackDelay();
-    if (delayMs === null) {
-      mode = 'paused';
-      sync();
-      return;
-    }
-
+    if (mode !== 'playing') { return; }
+    var delayMs = getNextPlaybackDelay();
+    if (delayMs === null) { mode = 'paused'; sync(); return; }
     timer = window.setTimeout(function () {
-      const nextState = getNextPlaybackState();
-      if (!nextState) {
-        mode = 'paused';
-        sync();
-        return;
-      }
-
+      var nextState = getNextPlaybackState();
+      if (!nextState) { mode = 'paused'; sync(); return; }
       turnIndex = nextState.turnIndex;
       visibleUnitIds = nextState.revealedUnitIds;
       sync();
@@ -1657,21 +1776,9 @@ function buildRuntime({
 
   if (playButton) {
     playButton.addEventListener('click', function () {
-      if (mode === 'playing') {
-        clearTimer();
-        mode = 'paused';
-        sync();
-        return;
-      }
-
-      if (playbackTurns.length === 0) {
-        return;
-      }
-
-      if (mode === 'idle' || playbackComplete()) {
-        resetPlayback();
-      }
-
+      if (mode === 'playing') { clearTimer(); mode = 'paused'; sync(); return; }
+      if (playbackTurns.length === 0) { return; }
+      if (mode === 'idle' || playbackComplete()) { resetPlayback(); }
       mode = 'playing';
       sync();
       schedulePlayback();
@@ -1680,57 +1787,29 @@ function buildRuntime({
 
   if (previousButton) {
     previousButton.addEventListener('click', function () {
-      if (!playbackCanStepBackward()) {
-        return;
-      }
-
+      if (!playbackCanStepBackward()) { return; }
       clearTimer();
-
-      if (mode === 'idle') {
-        resetPlayback();
-        mode = 'paused';
-        sync();
-        return;
-      }
-
+      if (mode === 'idle') { resetPlayback(); mode = 'paused'; sync(); return; }
       mode = 'paused';
-      const previousState = getPreviousPlaybackState();
-      if (!previousState) {
-        resetPlayback();
-        sync();
-        return;
-      }
-
-      turnIndex = previousState.turnIndex;
-      visibleUnitIds = previousState.revealedUnitIds;
+      var prev = getPreviousPlaybackState();
+      if (!prev) { resetPlayback(); sync(); return; }
+      turnIndex = prev.turnIndex;
+      visibleUnitIds = prev.revealedUnitIds;
       sync();
     });
   }
 
   if (nextButton) {
     nextButton.addEventListener('click', function () {
-      if (playbackTurns.length === 0) {
-        return;
-      }
-
-      const playbackWasStarted = mode !== 'idle';
+      if (playbackTurns.length === 0) { return; }
+      var wasStarted = mode !== 'idle';
       clearTimer();
       mode = 'paused';
-
-      if (!playbackWasStarted || playbackComplete()) {
-        resetPlayback();
-        sync();
-        return;
-      }
-
-      const nextState = getNextPlaybackState();
-      if (!nextState) {
-        sync();
-        return;
-      }
-
-      turnIndex = nextState.turnIndex;
-      visibleUnitIds = nextState.revealedUnitIds;
+      if (!wasStarted || playbackComplete()) { resetPlayback(); sync(); return; }
+      var next = getNextPlaybackState();
+      if (!next) { sync(); return; }
+      turnIndex = next.turnIndex;
+      visibleUnitIds = next.revealedUnitIds;
       sync();
     });
   }
@@ -1739,12 +1818,21 @@ function buildRuntime({
     speedButton.addEventListener('click', function () {
       speedIndex = (speedIndex + 1) % speeds.length;
       sync();
-      if (mode === 'playing') {
-        schedulePlayback();
-      }
+      if (mode === 'playing') { schedulePlayback(); }
     });
+  }
+
+  if (content) {
+    content.addEventListener('scroll', function () {
+      if (scrollFrame !== null) { window.cancelAnimationFrame(scrollFrame); }
+      scrollFrame = window.requestAnimationFrame(function () {
+        scrollFrame = null;
+        renderWindow();
+      });
+    }, { passive: true });
   }
 
   sync();
 }())`
 }
+

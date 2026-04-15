@@ -703,6 +703,11 @@ small {
   gap: var(--space-3);
 }
 
+.preview-block__transcript--virtual {
+  display: block;
+  min-height: 100%;
+}
+
 .preview-block__empty {
   width: min(100%, 520px);
   margin: auto;
