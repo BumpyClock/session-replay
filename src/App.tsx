@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BrowserPanel, type SessionSummary } from './features/browser/BrowserPanel'
+import { BrowserPanel } from './features/browser/BrowserPanel'
+import {
+  countActiveFilters,
+  createAgentFilterOptions,
+  createBrowserSessionRows,
+  createProjectFilterOptions,
+  createProjectGroups,
+  filterBrowserSessionRows,
+  getSourceLabel,
+} from './features/browser/model'
 import { ReplayPanel } from './features/preview/ReplayPanel'
 import type { PreviewTurn, ReplaySession } from './features/preview/ReplayPanel'
 import { ExportPreviewDialog } from './features/export/ExportPreviewDialog'
 import { ExportPanel, type ExportOptions } from './features/export/ExportPanel'
 import { createSessionReplayApiClient as createApiClient } from './lib/api'
+import { useBrowserPrefsStore } from './lib/browser/store'
 import {
   getSessionBaseRevision,
   materializeReplayRenderRequest,
@@ -21,14 +31,6 @@ import type { SessionWarning } from './lib/session'
 import { getReplayTurnPreviewText, summarizeReplayTurn } from './lib/replay/blocks'
 import { expandReplayBlocks } from './lib/replay/context-blocks'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
-
-const providerLabelMap: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  copilot: 'Copilot',
-  cursor: 'Cursor',
-  gemini: 'Gemini',
-}
 
 const defaultFileNameFor = (session: Pick<SessionRef, 'id' | 'title'>): string => {
   const base = session.title?.trim() || session.id || 'agent-session-replay'
@@ -91,7 +93,7 @@ function makeReplaySession(
 
   return {
     id: session.id,
-    provider: providerLabelMap[session.source] ?? session.source,
+    provider: getSourceLabel(session.source),
     project: session.project ?? 'Unknown project',
     cwd: session.cwd ?? '',
     title: session.title,
@@ -99,33 +101,6 @@ function makeReplaySession(
     turnCount: turns.length,
     turns,
   }
-}
-
-/** Filters and labels catalog rows for the session browser rail. */
-function makeBrowserRows(sessions: SessionRef[], query: string): SessionSummary[] {
-  const trimmed = query.trim().toLowerCase()
-  return sessions
-    .filter((session) => {
-      if (!trimmed) {
-        return true
-      }
-
-      const haystack = [session.title, session.project, session.path, session.source, session.summary]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-
-      return haystack.includes(trimmed)
-    })
-    .map((session) => ({
-      id: session.id,
-      provider: providerLabelMap[session.source] ?? session.source,
-      project: session.project ?? 'Unknown project',
-      title: session.title,
-      cwd: session.cwd ?? '',
-      updatedAt: session.updatedAt ?? '',
-      turnCount: session.stats?.turnCount ?? 0,
-    }))
 }
 
 /** Resolves the API base so production exports can still talk to the local server. */
@@ -180,6 +155,22 @@ function App() {
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSettingsOpen, setExportSettingsOpen] = useState(false)
   const pollingRequestInFlight = useRef(false)
+
+  const browserFilters = useBrowserPrefsStore((state) => state.filters)
+  const collapsedProjectIds = useBrowserPrefsStore((state) => state.collapsedProjectIds)
+  const pinnedProjectIds = useBrowserPrefsStore((state) => state.pinnedProjectIds)
+  const ignoredProjectIds = useBrowserPrefsStore((state) => state.ignoredProjectIds)
+  const clearBrowserFilters = useBrowserPrefsStore((state) => state.clearFilters)
+  const restoreIgnoredProject = useBrowserPrefsStore((state) => state.restoreIgnoredProject)
+  const setRequireCwd = useBrowserPrefsStore((state) => state.setRequireCwd)
+  const setRequirePath = useBrowserPrefsStore((state) => state.setRequirePath)
+  const setUpdatedWithin = useBrowserPrefsStore((state) => state.setUpdatedWithin)
+  const toggleAgentFilter = useBrowserPrefsStore((state) => state.toggleAgentFilter)
+  const toggleCollapsedProject = useBrowserPrefsStore((state) => state.toggleCollapsedProject)
+  const toggleIgnoredProject = useBrowserPrefsStore((state) => state.toggleIgnoredProject)
+  const togglePinnedProject = useBrowserPrefsStore((state) => state.togglePinnedProject)
+  const toggleProjectFilter = useBrowserPrefsStore((state) => state.toggleProjectFilter)
+  const toggleTurnLength = useBrowserPrefsStore((state) => state.toggleTurnLength)
 
   const ensureDraft = useEditorStore((state) => state.ensureDraft)
   const setBookmark = useEditorStore((state) => state.setBookmark)
@@ -246,7 +237,22 @@ function App() {
     }
   }, [])
 
-  const visibleSessions = useMemo(() => makeBrowserRows(sessions, searchText), [searchText, sessions])
+  const browserRows = useMemo(() => createBrowserSessionRows(sessions), [sessions])
+  const visibleBrowserRows = useMemo(
+    () => filterBrowserSessionRows(browserRows, searchText, browserFilters, ignoredProjectIds),
+    [browserFilters, browserRows, ignoredProjectIds, searchText],
+  )
+  const projectGroups = useMemo(
+    () => createProjectGroups(visibleBrowserRows, pinnedProjectIds),
+    [pinnedProjectIds, visibleBrowserRows],
+  )
+  const agentOptions = useMemo(() => createAgentFilterOptions(browserRows), [browserRows])
+  const projectOptions = useMemo(() => createProjectFilterOptions(browserRows), [browserRows])
+  const ignoredProjectOptions = useMemo(
+    () => projectOptions.filter((option) => ignoredProjectIds.includes(option.id)),
+    [ignoredProjectIds, projectOptions],
+  )
+  const activeFilterCount = useMemo(() => countActiveFilters(browserFilters), [browserFilters])
   const catalogNotice = useMemo(() => formatCatalogNotice(catalogWarnings), [catalogWarnings])
   const catalogSummary = useMemo(
     () => formatCatalogSummary(catalogStatus, sessions.length),
@@ -489,18 +495,40 @@ function App() {
       <div className="app-root">
         <Sidebar aria-label="Session browser" collapsible="offcanvas">
           <BrowserPanel
-            sessions={visibleSessions}
+            activeFilterCount={activeFilterCount}
+            agentOptions={agentOptions}
+            collapsedProjectIds={collapsedProjectIds}
+            filters={browserFilters}
+            ignoredProjectOptions={ignoredProjectOptions}
+            pinnedProjectIds={pinnedProjectIds}
+            projectGroups={projectGroups}
+            projectOptions={projectOptions}
             selectedSessionId={selectedSessionId}
             searchText={searchText}
+            emptyMessage={
+              searchText || activeFilterCount > 0
+                ? 'No sessions match your current search or filters'
+                : 'No sessions found'
+            }
+            error={sessionsError}
+            loading={sessionsLoading}
+            notice={catalogNotice}
+            onClearFilters={clearBrowserFilters}
+            onRefresh={handleRefresh}
+            onRequireCwdChange={setRequireCwd}
+            onRequirePathChange={setRequirePath}
+            onRestoreIgnoredProject={restoreIgnoredProject}
             onSearchTextChange={setSearchText}
             onSelectSession={handleSelectSession}
-            onRefresh={handleRefresh}
-            loading={sessionsLoading}
+            onSetUpdatedWithin={setUpdatedWithin}
+            onToggleAgentFilter={toggleAgentFilter}
+            onToggleProjectCollapse={toggleCollapsedProject}
+            onToggleProjectFilter={toggleProjectFilter}
+            onToggleProjectIgnore={toggleIgnoredProject}
+            onToggleProjectPin={togglePinnedProject}
+            onToggleTurnLength={toggleTurnLength}
             refreshing={catalogRefreshing}
-            error={sessionsError}
-            notice={catalogNotice}
             summaryText={catalogSummary}
-            emptyMessage={searchText ? 'No sessions match your query' : 'No sessions found'}
           />
         </Sidebar>
 

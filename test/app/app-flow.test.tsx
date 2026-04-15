@@ -1,7 +1,8 @@
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { DEFAULT_FILTERS, browserPrefsStore } from '../../src/lib/browser/store'
 
 const { listSessionsMock, loadSessionMock, previewSessionMock, exportSessionDocumentMock } =
   vi.hoisted(() => ({
@@ -36,8 +37,15 @@ describe('App flow', () => {
       configurable: true,
       value: localStorageMock,
     })
+    browserPrefsStore.setState({
+      collapsedProjectIds: [],
+      filters: DEFAULT_FILTERS,
+      ignoredProjectIds: [],
+      pinnedProjectIds: [],
+    })
     localStorageMock.clear()
     localStorageMock.getItem.mockReset()
+    localStorageMock.getItem.mockReturnValue(null)
     localStorageMock.key.mockReset()
     localStorageMock.removeItem.mockReset()
     localStorageMock.setItem.mockReset()
@@ -187,6 +195,90 @@ describe('App flow', () => {
     await user.type(screen.getByRole('textbox'), 'sample')
 
     await waitFor(() => expect(previewSessionMock).toHaveBeenCalledTimes(settledPreviewCalls))
+  })
+
+  it('filters the sidebar without rerendering the loaded preview', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          source: 'claude-code',
+          path: '/tmp/session-1.jsonl',
+          title: 'Sample session',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+          cwd: null,
+          stats: {
+            turnCount: 1,
+          },
+        },
+        {
+          id: 'session-2',
+          source: 'copilot',
+          path: '/tmp/session-2.jsonl',
+          title: 'Copilot session',
+          project: 'other-project',
+          updatedAt: '2026-04-12T10:00:00.000Z',
+          startedAt: null,
+          cwd: null,
+          stats: {
+            turnCount: 2,
+          },
+        },
+      ],
+    })
+
+    loadSessionMock.mockResolvedValue({
+      session: {
+        id: 'session-1',
+        title: 'Sample session',
+        source: 'claude-code',
+        project: 'sample-project',
+        cwd: '/repo',
+        summary: 'sample',
+        startedAt: '2026-04-13T10:00:00.000Z',
+        updatedAt: '2026-04-13T10:00:00.000Z',
+        turns: [
+          {
+            id: 'turn-1',
+            index: 0,
+            role: 'assistant',
+            timestamp: '2026-04-13T10:00:00.000Z',
+            included: true,
+            blocks: [
+              {
+                id: 'block-1',
+                type: 'text',
+                text: 'assistant message',
+              },
+            ],
+          },
+        ],
+      },
+    })
+    previewSessionMock.mockResolvedValue({ html: '<div data-testid="preview">preview</div>' })
+
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByRole('button', { name: /sample session/i })
+    expect(screen.getByRole('button', { name: /copilot session/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /sample session/i }))
+    await waitFor(() => expect(previewSessionMock).toHaveBeenCalled())
+    const settledPreviewCalls = previewSessionMock.mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: /filter sessions/i }))
+    const filterPanel = screen.getByText(/session filters/i).closest('article') as HTMLElement
+    await user.click(within(filterPanel).getByRole('button', { name: /sample-project/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /copilot session/i })).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: /sample session/i })).toBeInTheDocument()
+    expect(previewSessionMock).toHaveBeenCalledTimes(settledPreviewCalls)
   })
 
   it('shows a non-fatal catalog warning when some sessions are skipped', async () => {
