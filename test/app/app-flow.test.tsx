@@ -4,11 +4,10 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DEFAULT_FILTERS, browserPrefsStore } from '../../src/lib/browser/store'
 
-const { listSessionsMock, loadSessionMock, previewSessionMock, exportSessionDocumentMock } =
+const { listSessionsMock, loadSessionMock, exportSessionDocumentMock } =
   vi.hoisted(() => ({
     listSessionsMock: vi.fn(),
     loadSessionMock: vi.fn(),
-    previewSessionMock: vi.fn(),
     exportSessionDocumentMock: vi.fn(),
   }))
 
@@ -26,7 +25,6 @@ vi.mock('../../src/lib/api/client', () => ({
     exportSessionDocument: exportSessionDocumentMock,
     listSessions: listSessionsMock,
     loadSession: loadSessionMock,
-    previewSession: previewSessionMock,
     searchSessions: vi.fn(),
   }),
 }))
@@ -51,11 +49,10 @@ describe('App flow', () => {
     localStorageMock.setItem.mockReset()
     listSessionsMock.mockReset()
     loadSessionMock.mockReset()
-    previewSessionMock.mockReset()
     exportSessionDocumentMock.mockReset()
   })
 
-  it('loads a session, renders preview state, and exports html', async () => {
+  it('loads a session, renders editor state, and exports html', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -102,7 +99,6 @@ describe('App flow', () => {
         ],
       },
     })
-    previewSessionMock.mockResolvedValue({ html: '<div data-testid="preview">preview</div>' })
     exportSessionDocumentMock.mockResolvedValue('<html>export</html>')
 
     const { default: App } = await import('../../src/App')
@@ -116,14 +112,9 @@ describe('App flow', () => {
 
     await user.click(await screen.findByRole('button', { name: /sample session/i }))
     await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(previewSessionMock).toHaveBeenCalled())
 
     expect(screen.getByRole('heading', { name: 'Session editor' })).toBeInTheDocument()
     expect(screen.getByText('assistant message')).toBeInTheDocument()
-    expect(screen.queryByTitle('Replay export preview')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Preview' }))
-    expect(await screen.findByTitle('Replay export preview')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /close export preview/i }))
     await user.click(screen.getByRole('button', { name: /open export settings/i }))
     expect(await screen.findByText(/local and read-only in the resulting bundle/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /close export settings/i }))
@@ -132,7 +123,7 @@ describe('App flow', () => {
     await waitFor(() => expect(exportSessionDocumentMock).toHaveBeenCalledTimes(1))
   }, 15000)
 
-  it('does not rerender preview on unrelated app rerenders', async () => {
+  it('keeps shared replay and export controls visible after entering playback mode', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -179,7 +170,6 @@ describe('App flow', () => {
         ],
       },
     })
-    previewSessionMock.mockResolvedValue({ html: '<div data-testid="preview">preview</div>' })
 
     const { default: App } = await import('../../src/App')
     const user = userEvent.setup()
@@ -187,17 +177,85 @@ describe('App flow', () => {
 
     await screen.findByRole('button', { name: /sample session/i })
     await user.click(screen.getByRole('button', { name: /sample session/i }))
-    await waitFor(() => expect(previewSessionMock).toHaveBeenCalled())
-    await new Promise((resolve) => window.setTimeout(resolve, 50))
-    const settledPreviewCalls = previewSessionMock.mock.calls.length
+    await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole('button', { name: 'Play transcript' }))
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'Replay and export controls' })
+    expect(within(toolbar).getByRole('button', { name: /Pause playback|Play transcript/ })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Previous step' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Next step' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: /Playback speed/ })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Exit playback' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Export' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Open export settings' })).toBeInTheDocument()
+
+    await user.click(within(toolbar).getByRole('button', { name: 'Open export settings' }))
+    expect(await screen.findByText(/generated one-file replay/i)).toBeInTheDocument()
+  })
+
+  it('does not rerender the loaded session on unrelated app rerenders', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          source: 'claude-code',
+          path: '/tmp/session-1.jsonl',
+          title: 'Sample session',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+          cwd: null,
+          stats: {
+            turnCount: 1,
+          },
+        },
+      ],
+    })
+
+    loadSessionMock.mockResolvedValue({
+      session: {
+        id: 'session-1',
+        title: 'Sample session',
+        source: 'claude-code',
+        project: 'sample-project',
+        cwd: '/repo',
+        summary: 'sample',
+        startedAt: '2026-04-13T10:00:00.000Z',
+        updatedAt: '2026-04-13T10:00:00.000Z',
+        turns: [
+          {
+            id: 'turn-1',
+            index: 0,
+            role: 'assistant',
+            timestamp: '2026-04-13T10:00:00.000Z',
+            included: true,
+            blocks: [
+              {
+                id: 'block-1',
+                type: 'text',
+                text: 'assistant message',
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await screen.findByRole('button', { name: /sample session/i })
+    await user.click(screen.getByRole('button', { name: /sample session/i }))
+    await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
 
     await user.click(screen.getByRole('button', { name: /search sessions/i }))
     await user.type(screen.getByRole('textbox'), 'sample')
 
-    await waitFor(() => expect(previewSessionMock).toHaveBeenCalledTimes(settledPreviewCalls))
+    await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
   })
 
-  it('filters the sidebar without rerendering the loaded preview', async () => {
+  it('filters the sidebar without reloading the selected session', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -257,8 +315,6 @@ describe('App flow', () => {
         ],
       },
     })
-    previewSessionMock.mockResolvedValue({ html: '<div data-testid="preview">preview</div>' })
-
     const { default: App } = await import('../../src/App')
     const user = userEvent.setup()
     render(<App />)
@@ -267,8 +323,7 @@ describe('App flow', () => {
     expect(screen.getByRole('button', { name: /copilot session/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /sample session/i }))
-    await waitFor(() => expect(previewSessionMock).toHaveBeenCalled())
-    const settledPreviewCalls = previewSessionMock.mock.calls.length
+    await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
 
     await user.click(screen.getByRole('button', { name: /filter sessions/i }))
     const filterPanel = screen.getByText(/session filters/i).closest('article') as HTMLElement
@@ -278,7 +333,7 @@ describe('App flow', () => {
       expect(screen.queryByRole('button', { name: /copilot session/i })).not.toBeInTheDocument()
     })
     expect(screen.getByRole('button', { name: /sample session/i })).toBeInTheDocument()
-    expect(previewSessionMock).toHaveBeenCalledTimes(settledPreviewCalls)
+    expect(loadSessionMock).toHaveBeenCalledTimes(1)
   })
 
   it('shows a non-fatal catalog warning when some sessions are skipped', async () => {

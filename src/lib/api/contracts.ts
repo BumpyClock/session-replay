@@ -89,7 +89,7 @@ export interface ReplayBookmark {
 }
 
 /**
- * Client-materialized replay payload rendered by preview/export endpoints.
+ * Client-materialized replay payload rendered by editor and export flows.
  */
 export interface MaterializedReplaySession {
   id: string
@@ -120,7 +120,7 @@ export interface ReplayTurn {
 }
 
 /**
- * Viewer-only render options for preview/export.
+ * Viewer-only render options for generated exports.
  */
 export interface ReplayRenderOptions {
   autoplayDelayMs?: number
@@ -177,18 +177,11 @@ export interface SessionSearchResponse {
 }
 
 /**
- * Shared body shape for preview and export rendering.
+ * Request body for rendering the one-file export document.
  */
 export interface SessionRenderRequest {
   options?: ReplayRenderOptions
   session: MaterializedReplaySession
-}
-
-/**
- * JSON preview response with iframe-ready HTML.
- */
-export interface SessionPreviewResponse {
-  html: string
 }
 
 /**

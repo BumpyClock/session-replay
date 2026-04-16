@@ -3,7 +3,6 @@ import type {
   SessionListResponse,
   SessionLoadRequest,
   SessionLoadResponse,
-  SessionPreviewResponse,
   SessionRenderRequest,
   SessionSearchRequest,
   SessionSearchResponse,
@@ -85,16 +84,6 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
 
         const response: SessionSearchResponse = {
           results: [...(await sessionSource.searchSessions({ ...body, query }))],
-        }
-
-        return jsonResponse(response, { status: 200 }, corsHeaders)
-      }
-
-      if (request.method === 'POST' && pathname === '/api/preview') {
-        const body = await readJsonBody<SessionRenderRequest>(request)
-        assertRenderRequest(body)
-        const response: SessionPreviewResponse = {
-          html: renderReplayDocument(body.session, body.options),
         }
 
         return jsonResponse(response, { status: 200 }, corsHeaders)

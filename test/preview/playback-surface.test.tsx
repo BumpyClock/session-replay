@@ -80,28 +80,28 @@ const session: ReplaySession = {
 const layout = prepareTranscriptLayout(session.turns)
 
 describe('PlaybackSurface', () => {
-  it('auto-starts in playing mode and shows playback controls without editor affordances', () => {
+  it('auto-starts in playing mode and keeps shared replay and export actions visible', () => {
     vi.useFakeTimers()
     try {
       render(
         <PlaybackSurface
+          canExport
           session={session}
           layout={layout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
-      const toolbar = screen.getByRole('toolbar', { name: 'Playback controls' })
+      const toolbar = screen.getByRole('toolbar', { name: 'Replay and export controls' })
       expect(within(toolbar).getByRole('button', { name: 'Pause playback' })).toBeInTheDocument()
       expect(within(toolbar).getByRole('button', { name: 'Previous step' })).toBeInTheDocument()
       expect(within(toolbar).getByRole('button', { name: 'Next step' })).toBeInTheDocument()
       expect(within(toolbar).getByRole('button', { name: /Playback speed/ })).toBeInTheDocument()
       expect(within(toolbar).getByRole('button', { name: 'Exit playback' })).toBeInTheDocument()
-
-      // No editor/export controls
-      expect(within(toolbar).queryByRole('button', { name: 'Export' })).not.toBeInTheDocument()
-      expect(within(toolbar).queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
-      expect(within(toolbar).queryByRole('button', { name: 'Open export settings' })).not.toBeInTheDocument()
+      expect(within(toolbar).getByRole('button', { name: 'Export' })).toBeInTheDocument()
+      expect(within(toolbar).getByRole('button', { name: 'Open export settings' })).toBeInTheDocument()
 
       // No bookmark edit or hide/show buttons on rows
       expect(screen.queryByRole('button', { name: /Add bookmark note/ })).not.toBeInTheDocument()
@@ -118,9 +118,12 @@ describe('PlaybackSurface', () => {
     try {
       const { container } = render(
         <PlaybackSurface
+          canExport
           session={session}
           layout={layout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
@@ -128,7 +131,7 @@ describe('PlaybackSurface', () => {
       expect(container.querySelectorAll('.replay-turn')).toHaveLength(1)
       // Hidden turns never appear
       expect(screen.queryByText('Hidden turn body')).not.toBeInTheDocument()
-      expect(screen.queryByText('Hidden from preview + export')).not.toBeInTheDocument()
+      expect(screen.queryByText('Hidden from playback + export')).not.toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
@@ -139,9 +142,12 @@ describe('PlaybackSurface', () => {
     try {
       render(
         <PlaybackSurface
+          canExport
           session={session}
           layout={layout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
@@ -184,9 +190,12 @@ describe('PlaybackSurface', () => {
     try {
       render(
         <PlaybackSurface
+          canExport
           session={session}
           layout={layout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
@@ -213,9 +222,12 @@ describe('PlaybackSurface', () => {
       const onExitPlayback = vi.fn()
       render(
         <PlaybackSurface
+          canExport
           session={session}
           layout={layout}
+          onExport={vi.fn()}
           onExitPlayback={onExitPlayback}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
@@ -259,9 +271,12 @@ describe('PlaybackSurface', () => {
       const multiTurnLayout = prepareTranscriptLayout(multiTurnSession.turns)
       const { container } = render(
         <PlaybackSurface
+          canExport
           session={multiTurnSession}
           layout={multiTurnLayout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 
@@ -318,9 +333,12 @@ describe('PlaybackSurface', () => {
     try {
       const { container } = render(
         <PlaybackSurface
+          canExport
           session={multiTurnSession}
           layout={multiTurnLayout}
+          onExport={vi.fn()}
           onExitPlayback={vi.fn()}
+          onOpenExportSettings={vi.fn()}
         />,
       )
 

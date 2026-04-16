@@ -12,7 +12,7 @@ import {
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 
-/** Render options shared by export generation and export preview. */
+/** Render options for generated one-file replay exports. */
 export type ExportOptions = {
   filename: string
   title: string
@@ -57,7 +57,7 @@ function ExportPanel({
             <p className="eyebrow">Export</p>
             <DialogTitle>Replay settings</DialogTitle>
             <DialogDescription>
-              Preview and Export use these settings for the generated one-file replay
+              Export uses these settings for the generated one-file replay
             </DialogDescription>
           </DialogHeader>
           <DialogClose asChild>
@@ -91,7 +91,7 @@ function ExportPanel({
           <label className="export-option export-option--toggle">
             <span className="export-option__copy">
               <span>Include tool call blocks</span>
-              <small>Show structured tool runs in preview and export</small>
+              <small>Show structured tool runs in the generated replay</small>
             </span>
             <Checkbox
               checked={options.includeToolCalls}

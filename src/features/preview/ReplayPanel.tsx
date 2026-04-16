@@ -1,5 +1,6 @@
-import { Clock, Download, Eye, Play, Settings2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Clock, Download, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { DEFAULT_PLAYBACK_SPEED } from '../../lib/replay/playback'
 import {
   collectDefaultOpenIds,
   prepareTranscriptLayout,
@@ -9,17 +10,19 @@ import { ReplayTurnRow } from './ReplayTurnRow'
 import type { PreviewTurn, ReplaySession } from './replay-model'
 import { ROW_GAP_PX, useVirtualTranscript, VIRTUALIZATION_THRESHOLD } from './useVirtualTranscript'
 
+/** Editor surface props, including the shared replay-toolbar state shown before playback starts. */
 export type ReplayPanelProps = {
   canExport?: boolean
   isExporting?: boolean
   layout?: PreparedTranscriptLayout | null
   onExport?: () => void
+  onCyclePlaybackSpeed?: () => void
   session: ReplaySession | null
+  playbackSpeed?: number
   visibleCount: number
   totalCount: number
   onBookmarkChange?: (turnId: string, nextLabel: string) => void
   onOpenExportSettings?: () => void
-  onOpenPreview?: () => void
   onStartPlayback?: () => void
   onToggleTurnIncluded?: (turnId: string) => void
 }
@@ -29,12 +32,13 @@ function ReplayPanel({
   isExporting,
   layout: externalLayout,
   onExport,
+  onCyclePlaybackSpeed,
   session,
+  playbackSpeed = DEFAULT_PLAYBACK_SPEED,
   visibleCount,
   totalCount,
   onBookmarkChange,
   onOpenExportSettings,
-  onOpenPreview,
   onStartPlayback,
   onToggleTurnIncluded,
 }: ReplayPanelProps) {
@@ -188,7 +192,7 @@ function ReplayPanel({
       >
         <header className="preview-block__header">
           <div className="preview-block__title-group">
-            <h2>{session ? 'Session editor' : 'Preview ready'}</h2>
+            <h2>{session ? 'Session editor' : 'Editor ready'}</h2>
             {session ? <p className="preview-block__details">{formatTurnCount(totalCount)}</p> : null}
           </div>
           {session ? (
@@ -254,7 +258,7 @@ function ReplayPanel({
         </div>
       </div>
       {session ? (
-        <div className="preview-block__dock" role="toolbar" aria-label="Editor controls">
+        <div className="preview-block__dock" role="toolbar" aria-label="Replay and export controls">
           {onStartPlayback ? (
             <button
               aria-label="Play transcript"
@@ -265,9 +269,29 @@ function ReplayPanel({
               <Play size={16} strokeWidth={1.8} />
             </button>
           ) : null}
-          <button className="preview-block__action" type="button" onClick={onOpenPreview}>
-            <Eye size={14} strokeWidth={1.8} />
-            Preview
+          <button
+            aria-label="Previous step"
+            className="preview-block__action preview-block__action--icon"
+            type="button"
+            disabled
+          >
+            <ChevronLeft size={16} strokeWidth={1.8} />
+          </button>
+          <button
+            aria-label="Next step"
+            className="preview-block__action preview-block__action--icon"
+            type="button"
+            disabled
+          >
+            <ChevronRight size={16} strokeWidth={1.8} />
+          </button>
+          <button
+            aria-label={`Playback speed ${playbackSpeed}x`}
+            className="preview-block__action preview-block__action--speed"
+            type="button"
+            onClick={onCyclePlaybackSpeed}
+          >
+            {playbackSpeed}x
           </button>
           <button
             className="preview-block__action preview-block__action--primary"

@@ -29,7 +29,7 @@ export type ReplayPlaybackTurnPlan = {
 }
 
 /**
- * Creates replay pacing units shared by the live preview and exported viewer.
+ * Creates replay pacing units shared by the playback surface and exported viewer.
  */
 export function createReplayPlaybackTurns(
   turns: readonly Pick<{ blocks: readonly ReplayBlock[]; id: string; role: ReplayRole }, 'blocks' | 'id' | 'role'>[],

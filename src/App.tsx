@@ -12,7 +12,6 @@ import {
 import { PlaybackSurface } from './features/playback/PlaybackSurface'
 import { ReplayPanel } from './features/preview/ReplayPanel'
 import { buildReplaySession } from './features/preview/replay-model'
-import { ExportPreviewDialog } from './features/export/ExportPreviewDialog'
 import { ExportPanel, type ExportOptions } from './features/export/ExportPanel'
 import { createSessionReplayApiClient as createApiClient } from './lib/api'
 import { useBrowserPrefsStore } from './lib/browser/store'
@@ -27,6 +26,7 @@ import type {
   SessionCatalogStatus,
   SessionRef,
 } from './lib/api/contracts'
+import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from './lib/replay/playback'
 import type { SessionWarning } from './lib/session'
 import { prepareTranscriptLayout } from './lib/replay/transcript-layout'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
@@ -68,6 +68,7 @@ function formatCatalogSummary(status: SessionCatalogStatus | null, sessionCount:
 
 const apiClient = resolveApiClient()
 const CATALOG_POLL_INTERVAL_MS = 750
+const DEFAULT_PLAYBACK_SPEED_INDEX = Math.max(PLAYBACK_SPEEDS.indexOf(DEFAULT_PLAYBACK_SPEED), 0)
 
 function App() {
   const [browserOpen, setBrowserOpen] = useState(false)
@@ -82,14 +83,11 @@ function App() {
   const [sessionLoading, setSessionLoading] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [loadedSession, setLoadedSession] = useState<MaterializedReplaySession | null>(null)
-  const [previewHtml, setPreviewHtml] = useState('')
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewError, setPreviewError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSettingsOpen, setExportSettingsOpen] = useState(false)
   const [playbackActive, setPlaybackActive] = useState(false)
+  const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(DEFAULT_PLAYBACK_SPEED_INDEX)
   const pollingRequestInFlight = useRef(false)
 
   const browserFilters = useBrowserPrefsStore((state) => state.filters)
@@ -215,23 +213,6 @@ function App() {
     return materializeReplayRenderRequest(materializedSession ?? loadedSession, loadedDraft)
   }, [loadedSession, loadedDraft, materializedSession])
 
-  const previewSignature = useMemo(() => {
-    if (!loadedSession) {
-      return ''
-    }
-
-    // Only draft fields that affect rendered export output belong in this signature.
-    return JSON.stringify({
-      baseRevision,
-      blockTextEdits: loadedDraft?.blockTextEdits ?? {},
-      excludedTurnIds: loadedDraft?.excludedTurnIds ?? [],
-      id: loadedSession.id,
-      updatedAt: loadedSession.updatedAt,
-      viewerOptions: loadedDraft?.viewerOptions ?? {},
-      exportMeta: loadedDraft?.exportMeta ?? {},
-    })
-  }, [baseRevision, loadedDraft, loadedSession])
-
   const transcriptLayout = useMemo(
     () => (materializedSession ? prepareTranscriptLayout(materializedSession.turns) : null),
     [materializedSession],
@@ -255,6 +236,7 @@ function App() {
     ? materializedSession.turns.filter((turn) => turn.included !== false).length
     : 0
   const totalTurnCount = materializedSession ? materializedSession.turns.length : 0
+  const playbackSpeed = PLAYBACK_SPEEDS[playbackSpeedIndex] ?? DEFAULT_PLAYBACK_SPEED
 
   const exportOptions: ExportOptions = useMemo(() => {
     const sessionTitle = loadedSession?.title ?? ''
@@ -300,40 +282,6 @@ function App() {
     ensureDraft(loadedSession.id, baseRevision)
   }, [baseRevision, ensureDraft, loadedSession])
 
-  useEffect(() => {
-    if (!renderRequest || !previewSignature) {
-      return
-    }
-
-    let isCancelled = false
-
-    const updatePreview = async () => {
-      setPreviewLoading(true)
-      setPreviewError(null)
-      try {
-        const response = await apiClient.previewSession(renderRequest)
-        if (!isCancelled) {
-          setPreviewHtml(response.html)
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          const message = error instanceof Error ? error.message : 'Preview failed'
-          setPreviewError(message)
-        }
-      } finally {
-        if (!isCancelled) {
-          setPreviewLoading(false)
-        }
-      }
-    }
-
-    void updatePreview()
-
-    return () => {
-      isCancelled = true
-    }
-  }, [previewSignature, renderRequest])
-
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
       const nextRef = sessions.find((session) => session.id === sessionId)
@@ -348,9 +296,6 @@ function App() {
       setExportSettingsOpen(false)
       setPlaybackActive(false)
       setLoadedSession(null)
-      setPreviewOpen(false)
-      setPreviewHtml('')
-      setPreviewError(null)
       try {
         const response = await apiClient.loadSession({ path: nextRef.path })
         setLoadedSession(response.session)
@@ -500,36 +445,38 @@ function App() {
             ) : null}
             {playbackActive && replaySession && transcriptLayout ? (
               <PlaybackSurface
+                canExport={canExport}
+                isExporting={exporting}
+                playbackSpeed={playbackSpeed}
                 session={replaySession}
                 layout={transcriptLayout}
+                onCyclePlaybackSpeed={() => setPlaybackSpeedIndex((current) => (current + 1) % PLAYBACK_SPEEDS.length)}
+                onExport={() => {
+                  void handleExport()
+                }}
                 onExitPlayback={() => setPlaybackActive(false)}
+                onOpenExportSettings={() => setExportSettingsOpen(true)}
               />
             ) : (
               <ReplayPanel
                 canExport={canExport}
                 isExporting={exporting}
                 layout={transcriptLayout}
+                playbackSpeed={playbackSpeed}
                 onExport={() => {
                   void handleExport()
                 }}
+                onCyclePlaybackSpeed={() => setPlaybackSpeedIndex((current) => (current + 1) % PLAYBACK_SPEEDS.length)}
                 session={replaySession}
                 visibleCount={visibleTurnCount}
                 totalCount={totalTurnCount}
                 onBookmarkChange={handleBookmarkChange}
                 onOpenExportSettings={() => setExportSettingsOpen(true)}
-                onOpenPreview={() => setPreviewOpen(true)}
                 onStartPlayback={replaySession ? () => setPlaybackActive(true) : undefined}
                 onToggleTurnIncluded={toggleTurn}
               />
             )}
           </main>
-          <ExportPreviewDialog
-            isOpen={previewOpen}
-            onOpenChange={setPreviewOpen}
-            previewError={previewError}
-            previewHtml={previewHtml}
-            previewLoading={previewLoading}
-          />
           <ExportPanel
             options={exportOptions}
             canExport={canExport}

@@ -121,7 +121,6 @@ describe('ReplayPanel', () => {
           visibleCount={2}
           onBookmarkChange={vi.fn()}
           onOpenExportSettings={vi.fn()}
-          onOpenPreview={vi.fn()}
           onToggleTurnIncluded={vi.fn()}
         />,
       )
@@ -155,12 +154,11 @@ describe('ReplayPanel', () => {
         visibleCount={0}
         onBookmarkChange={vi.fn()}
         onOpenExportSettings={vi.fn()}
-        onOpenPreview={vi.fn()}
         onToggleTurnIncluded={vi.fn()}
       />,
     )
 
-    expect(screen.getByRole('heading', { level: 2, name: 'Preview ready' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Editor ready' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 3, name: 'Choose a session from the library' })).toBeInTheDocument()
     expect(
       screen.getByText('Open any conversation in the browser rail to inspect tool calls, thinking blocks, and timeline turns.'),
@@ -174,7 +172,6 @@ describe('ReplayPanel', () => {
     const onBookmarkChange = vi.fn()
     const onExport = vi.fn()
     const onOpenExportSettings = vi.fn()
-    const onOpenPreview = vi.fn()
     const onStartPlayback = vi.fn()
     const onToggleTurnIncluded = vi.fn()
     const { container } = render(
@@ -187,7 +184,6 @@ describe('ReplayPanel', () => {
         visibleCount={2}
         onBookmarkChange={onBookmarkChange}
         onOpenExportSettings={onOpenExportSettings}
-        onOpenPreview={onOpenPreview}
         onStartPlayback={onStartPlayback}
         onToggleTurnIncluded={onToggleTurnIncluded}
       />,
@@ -203,20 +199,19 @@ describe('ReplayPanel', () => {
     expect(screen.queryByText('Replay preview')).not.toBeInTheDocument()
     expect(screen.getByText('ASSISTANT:')).toBeInTheDocument()
     expect(screen.getByText('Keep this tool result')).toBeInTheDocument()
-    expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()
+    expect(screen.getByText('Hidden from playback + export')).toBeInTheDocument()
     expect(screen.getByText('1 text, 1 thinking, 1 tool call')).toBeInTheDocument()
     expect(screen.getByText('07:04 AM')).toBeInTheDocument()
     expect(screen.getByText('completed · src/App.tsx')).toBeInTheDocument()
 
-    // Editor toolbar has play, preview, export, and settings — no step/speed controls
-    const toolbar = screen.getByRole('toolbar', { name: 'Editor controls' })
+    // Editor toolbar always shows replay + export controls, even before playback starts.
+    const toolbar = screen.getByRole('toolbar', { name: 'Replay and export controls' })
     expect(within(toolbar).getByRole('button', { name: 'Play transcript' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Previous step' })).toBeDisabled()
+    expect(within(toolbar).getByRole('button', { name: 'Next step' })).toBeDisabled()
+    expect(within(toolbar).getByRole('button', { name: /Playback speed 4x/ })).toBeInTheDocument()
     expect(within(toolbar).getByRole('button', { name: 'Open export settings' })).toBeInTheDocument()
-    expect(within(toolbar).getByRole('button', { name: 'Preview' })).toBeInTheDocument()
     expect(within(toolbar).getByRole('button', { name: 'Export' })).toBeInTheDocument()
-    expect(within(toolbar).queryByRole('button', { name: 'Previous step' })).not.toBeInTheDocument()
-    expect(within(toolbar).queryByRole('button', { name: 'Next step' })).not.toBeInTheDocument()
-    expect(within(toolbar).queryByRole('button', { name: /Playback speed/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Expand all' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Collapse all' })).not.toBeInTheDocument()
 
@@ -227,9 +222,6 @@ describe('ReplayPanel', () => {
 
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Open export settings' }))
     expect(onOpenExportSettings).toHaveBeenCalledTimes(1)
-
-    fireEvent.click(within(toolbar).getByRole('button', { name: 'Preview' }))
-    expect(onOpenPreview).toHaveBeenCalledTimes(1)
 
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Export' }))
     expect(onExport).toHaveBeenCalledTimes(1)
@@ -243,28 +235,27 @@ describe('ReplayPanel', () => {
     fireEvent.keyDown(noteInput, { key: 'Enter' })
     expect(onBookmarkChange).toHaveBeenCalledWith('turn-1', 'Flag this answer')
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Hide turn from preview and export' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Hide turn from playback and export' })[0])
     expect(onToggleTurnIncluded).toHaveBeenCalledWith('turn-0')
   })
 
   it('shows all turns including hidden turns in editor mode', () => {
     const { container } = render(
-      <ReplayPanel
-        canExport
-        layout={sessionLayout}
-        onExport={vi.fn()}
-        session={session}
-        totalCount={3}
-        visibleCount={2}
-        onBookmarkChange={vi.fn()}
-        onOpenExportSettings={vi.fn()}
-        onOpenPreview={vi.fn()}
-        onToggleTurnIncluded={vi.fn()}
-      />,
-    )
+        <ReplayPanel
+          canExport
+          layout={sessionLayout}
+          onExport={vi.fn()}
+          session={session}
+          totalCount={3}
+          visibleCount={2}
+          onBookmarkChange={vi.fn()}
+          onOpenExportSettings={vi.fn()}
+          onToggleTurnIncluded={vi.fn()}
+        />,
+      )
 
     // Editor always displays all turns — including hidden ones
     expect(container.querySelectorAll('.replay-turn')).toHaveLength(3)
-    expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()
+    expect(screen.getByText('Hidden from playback + export')).toBeInTheDocument()
   })
 })

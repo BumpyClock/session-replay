@@ -1,12 +1,10 @@
-import { ChevronLeft, ChevronRight, Pause, Play, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Pause, Play, Settings2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  DEFAULT_PLAYBACK_SPEED,
   getActivePlaybackUnitId,
   getNextPlaybackDelay,
   getNextPlaybackState,
   getPreviousPlaybackState,
-  PLAYBACK_SPEEDS,
 } from '../../lib/replay/playback'
 import {
   collectDefaultOpenIds,
@@ -18,21 +16,34 @@ import { ReplayTurnRow, type ReplayTurnPlaybackState } from '../preview/ReplayTu
 import { ROW_GAP_PX, useVirtualTranscript } from '../preview/useVirtualTranscript'
 import { usePlaybackViewport } from './usePlaybackViewport'
 
+/** Playback surface consumes shared replay-toolbar state so editor and playback stay in sync. */
 export interface PlaybackSurfaceProps {
+  canExport?: boolean
+  isExporting?: boolean
+  playbackSpeed?: number
   session: ReplaySession
   layout: PreparedTranscriptLayout
+  onCyclePlaybackSpeed?: () => void
+  onExport?: () => void
   onExitPlayback: () => void
+  onOpenExportSettings?: () => void
 }
 
 type PlaybackMode = 'playing' | 'paused'
 
-function PlaybackSurface({ session, layout, onExitPlayback }: PlaybackSurfaceProps) {
+function PlaybackSurface({
+  canExport,
+  isExporting,
+  playbackSpeed = 4,
+  session,
+  layout,
+  onCyclePlaybackSpeed,
+  onExport,
+  onExitPlayback,
+  onOpenExportSettings,
+}: PlaybackSurfaceProps) {
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(() => collectDefaultOpenIds(layout))
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('playing')
-  const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(() => {
-    const defaultIndex = PLAYBACK_SPEEDS.indexOf(DEFAULT_PLAYBACK_SPEED)
-    return defaultIndex >= 0 ? defaultIndex : 0
-  })
   const [playbackTurnIndex, setPlaybackTurnIndex] = useState(0)
   const [revealedUnitIds, setRevealedUnitIds] = useState<Set<string>>(new Set())
   const {
@@ -61,7 +72,6 @@ function PlaybackSurface({ session, layout, onExitPlayback }: PlaybackSurfacePro
     [playbackTurns],
   )
 
-  const playbackSpeed = PLAYBACK_SPEEDS[playbackSpeedIndex] ?? DEFAULT_PLAYBACK_SPEED
   const activePlaybackTurn = playbackTurns[playbackTurnIndex]
   const activePlaybackUnitId = useMemo(
     () => getActivePlaybackUnitId(activePlaybackTurn, revealedUnitIds),
@@ -332,7 +342,7 @@ function PlaybackSurface({ session, layout, onExitPlayback }: PlaybackSurfacePro
           </ul>
         </div>
       </div>
-      <div className="preview-block__dock" role="toolbar" aria-label="Playback controls">
+      <div className="preview-block__dock" role="toolbar" aria-label="Replay and export controls">
         <button
           aria-label={playbackMode === 'playing' ? 'Pause playback' : 'Play transcript'}
           className={`preview-block__action preview-block__action--icon ${playbackMode === 'playing' ? 'preview-block__action--active' : ''}`}
@@ -398,9 +408,26 @@ function PlaybackSurface({ session, layout, onExitPlayback }: PlaybackSurfacePro
           aria-label={`Playback speed ${playbackSpeed}x`}
           className="preview-block__action preview-block__action--speed"
           type="button"
-          onClick={() => setPlaybackSpeedIndex((current) => (current + 1) % PLAYBACK_SPEEDS.length)}
+          onClick={onCyclePlaybackSpeed}
         >
           {playbackSpeed}x
+        </button>
+        <button
+          className="preview-block__action preview-block__action--primary"
+          type="button"
+          disabled={!canExport || isExporting}
+          onClick={onExport}
+        >
+          <Download size={14} strokeWidth={1.8} />
+          {isExporting ? 'Exporting…' : 'Export'}
+        </button>
+        <button
+          aria-label="Open export settings"
+          className="preview-block__action preview-block__action--icon"
+          type="button"
+          onClick={onOpenExportSettings}
+        >
+          <Settings2 size={16} strokeWidth={1.8} />
         </button>
         <button
           aria-label="Exit playback"

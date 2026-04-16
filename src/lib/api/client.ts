@@ -2,7 +2,6 @@ import type {
   SessionListResponse,
   SessionLoadRequest,
   SessionLoadResponse,
-  SessionPreviewResponse,
   SessionRenderRequest,
   SessionSearchRequest,
   SessionSearchResponse,
@@ -17,7 +16,6 @@ export interface SessionReplayApiClient {
   exportSessionDocument(request: SessionRenderRequest, fileName?: string): Promise<string>
   listSessions(): Promise<SessionListResponse>
   loadSession(request: SessionLoadRequest): Promise<SessionLoadResponse>
-  previewSession(request: SessionRenderRequest): Promise<SessionPreviewResponse>
   searchSessions(request: SessionSearchRequest): Promise<SessionSearchResponse>
 }
 
@@ -40,12 +38,6 @@ export function createSessionReplayApiClient(
     listSessions: () => fetchJson<SessionListResponse>(`${baseUrl}/api/sessions`),
     loadSession: (request) =>
       fetchJson<SessionLoadResponse>(`${baseUrl}/api/load`, {
-        body: JSON.stringify(request),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      }),
-    previewSession: (request) =>
-      fetchJson<SessionPreviewResponse>(`${baseUrl}/api/preview`, {
         body: JSON.stringify(request),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',

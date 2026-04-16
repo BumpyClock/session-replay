@@ -133,7 +133,7 @@ export function ReplayTurnRow({
                   <Bookmark size={14} strokeWidth={1.8} />
                 </button>
                 <button
-                  aria-label={turn.isHidden ? 'Show turn in preview and export' : 'Hide turn from preview and export'}
+                  aria-label={turn.isHidden ? 'Show turn in playback and export' : 'Hide turn from playback and export'}
                   className={`replay-turn__icon-button ${turn.isHidden ? 'is-active' : ''}`}
                   type="button"
                   onClick={() => onToggleTurnIncluded?.(turn.id)}
@@ -187,7 +187,7 @@ export function ReplayTurnRow({
         </div>
         {turn.isHidden ? (
           <div className="replay-turn__collapsed-preview">
-            <span className="replay-turn__collapsed-label">Hidden from preview + export</span>
+            <span className="replay-turn__collapsed-label">Hidden from playback + export</span>
             <p className="replay-turn__collapsed-text">{turn.previewText ?? turn.summary}</p>
           </div>
         ) : (
