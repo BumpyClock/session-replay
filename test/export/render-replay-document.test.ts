@@ -143,6 +143,7 @@ describe('renderReplayDocument', () => {
     expect(html).toContain('class="preview-block preview-block--export"')
     expect(html).toContain('class="preview-block__dock" role="toolbar" aria-label="Playback controls"')
     expect(html).not.toContain('preview-block__transcript--virtual')
+    expect(html).toContain('[hidden] {\n  display: none !important;\n}')
     expect(html).toContain('.export-page__preview {\n  width: min(100%, 1040px);\n  height: calc(100svh - 32px);')
     expect(html).toContain('replay-turn replay-turn--tool')
     expect(html).toContain('replay-turn__note-pill')
@@ -178,9 +179,9 @@ describe('renderReplayDocument', () => {
     })
 
     expect(revealedThinkingHtml).toContain('Sensitive chain of thought')
-    expect(revealedThinkingHtml).toContain('2026-04-13T08:00:01.000Z')
-    expect(revealedThinkingHtml).toContain('datetime=\\"2026-04-13T08:00:01.000Z\\"')
-    expect(revealedThinkingHtml).toContain('replay-disclosure replay-disclosure--thinking\\" open data-replay-kind=\\"thinking\\"')
+    expect(revealedThinkingHtml).toContain('class=\\"replay-turn__timestamp\\"')
+    expect(revealedThinkingHtml).not.toContain('<time ')
+    expect(revealedThinkingHtml).toContain('replay-disclosure replay-disclosure--thinking\\" data-replay-kind=\\"thinking\\" open=\\"\\"')
     expect(revealedThinkingHtml).toContain('replay-disclosure replay-disclosure--tool')
     expect(revealedThinkingHtml).toContain('Skill context')
     expect(revealedThinkingHtml).toContain('ux-designer')
@@ -282,28 +283,32 @@ describe('renderReplayDocument', () => {
     expect(html).not.toContain('data-action="toggle-thinking"')
   })
 
-  it('keeps export playback controls interactive without virtual transcript positioning', async () => {
+  it('starts the standalone playback transcript from the current step instead of showing future turns', async () => {
     const html = renderReplayDocument(createFixtureSession(), {
-      includeThinking: false,
-      initialTurnIndex: 1,
+      includeThinking: true,
     })
     const dom = await createExportDom(html)
     const { document } = dom.window
 
+    const stage = document.querySelector('[data-playback-stage]') as HTMLDivElement | null
     const transcript = document.querySelector('[data-playback-transcript]')
     const playButton = document.querySelector('[data-action="toggle-play"]') as HTMLButtonElement | null
     const turnNodes = Array.from(document.querySelectorAll('.replay-turn')) as HTMLLIElement[]
 
+    expect(stage?.getAttribute('data-viewport-state')).toBe('underflow-bottom-anchored')
     expect(transcript).not.toBeNull()
     expect(transcript?.classList.contains('preview-block__transcript--virtual')).toBe(false)
     expect(playButton?.getAttribute('aria-label')).toBe('Play transcript')
-    expect(turnNodes).toHaveLength(2)
-    expect(turnNodes.every((node) => !node.hidden)).toBe(true)
+    expect(turnNodes).toHaveLength(3)
+    expect(turnNodes[0]?.hidden).toBe(false)
+    expect(turnNodes[1]?.hidden).toBe(true)
+    expect(turnNodes[2]?.hidden).toBe(true)
     expect(turnNodes.every((node) => !node.getAttribute('style')?.includes('position:absolute'))).toBe(true)
 
     playButton?.click()
 
     expect(playButton?.getAttribute('aria-label')).toBe('Pause playback')
+    expect(stage?.getAttribute('data-viewport-state')).toBe('underflow-bottom-anchored')
     expect(turnNodes[0]?.hidden).toBe(false)
     expect(turnNodes[1]?.hidden).toBe(true)
   })

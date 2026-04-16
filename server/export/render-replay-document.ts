@@ -120,9 +120,11 @@ export function renderReplayDocument(
               <p>No turns available in this export.</p>
               <p class="preview-block__hint">Adjust export filters in editor mode if you expected more transcript content.</p>
             </div>`
-                : `<ul class="preview-block__transcript" data-playback-transcript>${replay.turns
-                  .map((turn) => turnHtmlById.get(turn.id) ?? '')
-                  .join('')}</ul>`
+                : `<div class="preview-block__stage" data-playback-stage data-viewport-state="underflow-bottom-anchored">
+              <ul class="preview-block__transcript" data-playback-transcript>${replay.turns
+                .map((turn) => turnHtmlById.get(turn.id) ?? '')
+                .join('')}</ul>
+            </div>`
             }
           </div>
           <div class="preview-block__dock" role="toolbar" aria-label="Playback controls">
@@ -342,7 +344,7 @@ function createBookmarkLabelsByTurnId(session: RenderableReplaySession): Map<str
 
 function createExpandedBlockIds(
   turnLayout: PreparedTurnLayout,
-  blocks: readonly MaterializedReplaySession['turns'][number]['blocks'],
+  blocks: MaterializedReplaySession['turns'][number]['blocks'],
   options: ReplayRenderOptions,
 ): Set<string> {
   const expandedBlockIds = new Set(turnLayout.defaultOpenIds)
@@ -510,6 +512,10 @@ button {
   font-family: var(--font-stack);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 pre,
 code {
   white-space: pre-wrap;
@@ -637,14 +643,31 @@ code {
   scroll-behavior: smooth;
 }
 
+.preview-block__stage {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 100%;
+  min-width: 0;
+}
+
 .preview-block__transcript {
   margin: 0;
   padding: 0;
   list-style: none;
-  margin-top: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.preview-block__stage[data-viewport-state="underflow-bottom-anchored"] {
+  justify-content: flex-end;
+}
+
+.preview-block__stage[data-viewport-state="overflow-scrollable"],
+.preview-block__stage[data-viewport-state="user-detached"] {
+  justify-content: flex-start;
 }
 
 .preview-block__empty {
@@ -1323,19 +1346,30 @@ function buildRuntime({
   var speeds = ${JSON.stringify(speeds)};
   var defaultSpeedIndex = ${defaultSpeedIndex};
   var content = document.querySelector('[data-playback-content]');
+  var stage = document.querySelector('[data-playback-stage]');
   var transcript = document.querySelector('[data-playback-transcript]');
   var playButton = document.querySelector('[data-action="toggle-play"]');
   var previousButton = document.querySelector('[data-action="prev"]');
   var nextButton = document.querySelector('[data-action="next"]');
   var speedButton = document.querySelector('[data-action="speed"]');
-  var mode = 'idle';
+  var mode = playbackTurns.length === 0 ? 'idle' : 'paused';
   var speedIndex = defaultSpeedIndex;
-  var turnIndex = 0;
+  var turnIndex = playbackTurns.length === 0
+    ? 0
+    : Math.min(Math.max(initialTurnIndex, 0), playbackTurns.length - 1);
   var timer = null;
   var initialScrollDone = false;
+  var hasOverflow = false;
+  var userDetached = false;
+  var programmaticScrollActive = false;
+  var programmaticScrollTimer = null;
+  var userScrollIntent = false;
+  var userScrollIntentTimer = null;
   var visibleUnitIds = new Set();
   var turnNodes = transcript ? Array.from(transcript.querySelectorAll('.replay-turn')) : [];
   var turnIndexById = {};
+  var PROGRAMMATIC_SCROLL_GUARD_MS = 150;
+  var USER_SCROLL_INTENT_WINDOW_MS = 500;
   for (var i = 0; i < playbackTurns.length; i++) {
     turnIndexById[playbackTurns[i].turnId] = i;
   }
@@ -1344,7 +1378,83 @@ function buildRuntime({
     if (timer !== null) { window.clearTimeout(timer); timer = null; }
   }
 
+  function clearProgrammaticScrollTracking() {
+    programmaticScrollActive = false;
+    if (programmaticScrollTimer !== null) {
+      window.clearTimeout(programmaticScrollTimer);
+      programmaticScrollTimer = null;
+    }
+  }
+
+  function clearUserScrollIntent() {
+    userScrollIntent = false;
+    if (userScrollIntentTimer !== null) {
+      window.clearTimeout(userScrollIntentTimer);
+      userScrollIntentTimer = null;
+    }
+  }
+
+  function resetViewport() {
+    clearProgrammaticScrollTracking();
+    clearUserScrollIntent();
+    hasOverflow = false;
+    userDetached = false;
+  }
+
+  function checkOverflow() {
+    if (!content) {
+      hasOverflow = false;
+      return;
+    }
+    hasOverflow = content.scrollHeight > content.clientHeight;
+  }
+
+  function deriveViewportState() {
+    if (userDetached) { return 'user-detached'; }
+    if (hasOverflow) { return 'overflow-scrollable'; }
+    return 'underflow-bottom-anchored';
+  }
+
+  function syncViewportState() {
+    checkOverflow();
+    if (stage) {
+      stage.setAttribute('data-viewport-state', deriveViewportState());
+    }
+  }
+
+  function markUserScrollIntent() {
+    userScrollIntent = true;
+    if (userScrollIntentTimer !== null) {
+      window.clearTimeout(userScrollIntentTimer);
+    }
+    userScrollIntentTimer = window.setTimeout(function () {
+      clearUserScrollIntent();
+    }, USER_SCROLL_INTENT_WINDOW_MS);
+  }
+
+  function onContentScroll() {
+    checkOverflow();
+    if (!hasOverflow || userDetached || programmaticScrollActive || !userScrollIntent) {
+      return;
+    }
+    clearUserScrollIntent();
+    userDetached = true;
+    sync();
+  }
+
+  function withProgrammaticScroll(scroll) {
+    programmaticScrollActive = true;
+    scroll();
+    if (programmaticScrollTimer !== null) {
+      window.clearTimeout(programmaticScrollTimer);
+    }
+    programmaticScrollTimer = window.setTimeout(function () {
+      clearProgrammaticScrollTracking();
+    }, PROGRAMMATIC_SCROLL_GUARD_MS);
+  }
+
   function resetPlayback() {
+    resetViewport();
     turnIndex = 0;
     visibleUnitIds = new Set();
   }
@@ -1493,27 +1603,32 @@ function buildRuntime({
 
     window.requestAnimationFrame(function () {
       if (!content) { return; }
+      syncViewportState();
 
       if (!initialScrollDone) {
         var initNode = findTurnNode(Math.min(initialTurnIndex, Math.max(0, turns.length - 1)));
-        if (initNode) {
+        if (initNode && deriveViewportState() !== 'underflow-bottom-anchored') {
           var initBottom = initNode.offsetTop + initNode.offsetHeight;
-          content.scrollTo({ behavior: 'auto', top: Math.max(0, initBottom - Math.max(0, content.clientHeight - 160)) });
+          withProgrammaticScroll(function () {
+            content.scrollTo({ behavior: 'auto', top: Math.max(0, initBottom - Math.max(0, content.clientHeight - 160)) });
+          });
         }
         initialScrollDone = true;
         return;
       }
 
-      if (!playbackStarted) { return; }
+      if (!playbackStarted || deriveViewportState() === 'underflow-bottom-anchored' || userDetached) { return; }
 
       var activeIndex = activeTurnId !== null ? turnIndexById[activeTurnId] : undefined;
       if (activeIndex !== undefined) {
         var activeNode = findTurnNode(activeIndex);
         if (!activeNode) { return; }
         var activeBottom = activeNode.offsetTop + activeNode.offsetHeight;
-        content.scrollTo({
-          behavior: 'auto',
-          top: Math.max(0, activeBottom - Math.max(0, content.clientHeight - 160)),
+        withProgrammaticScroll(function () {
+          content.scrollTo({
+            behavior: 'auto',
+            top: Math.max(0, activeBottom - Math.max(0, content.clientHeight - 160)),
+          });
         });
       }
     });
@@ -1580,6 +1695,13 @@ function buildRuntime({
       sync();
       if (mode === 'playing') { schedulePlayback(); }
     });
+  }
+
+  if (content) {
+    content.addEventListener('scroll', onContentScroll);
+    content.addEventListener('pointerdown', markUserScrollIntent);
+    content.addEventListener('touchstart', markUserScrollIntent);
+    content.addEventListener('wheel', markUserScrollIntent);
   }
 
   sync();
