@@ -1,39 +1,13 @@
 import { Clock, Download, Eye, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReplayBlock, ReplayRole } from '../../lib/api/contracts'
 import {
   collectDefaultOpenIds,
   prepareTranscriptLayout,
 } from '../../lib/replay/transcript-layout'
 import type { PreparedTranscriptLayout } from '../../lib/replay/transcript-layout-types'
 import { ReplayTurnRow } from './ReplayTurnRow'
+import type { PreviewTurn, ReplaySession } from './replay-model'
 import { ROW_GAP_PX, useVirtualTranscript, VIRTUALIZATION_THRESHOLD } from './useVirtualTranscript'
-
-export type PreviewTurnRole = ReplayRole
-
-export type PreviewTurn = {
-  blocks: ReplayBlock[]
-  bookmarkLabel?: string
-  id: string
-  role: PreviewTurnRole
-  summary: string
-  timestamp: string
-  isHidden?: boolean
-  isBookmarked?: boolean
-  previewText?: string
-  timeLabel: string
-}
-
-export type ReplaySession = {
-  id: string
-  provider: string
-  project: string
-  title: string
-  cwd: string
-  updatedAt: string
-  turnCount: number
-  turns: PreviewTurn[]
-}
 
 export type ReplayPanelProps = {
   canExport?: boolean
@@ -335,3 +309,4 @@ function getRequiredTurnLayout(
 }
 
 export { ReplayPanel }
+export type { PreviewTurn, PreviewTurnRole, ReplaySession } from './replay-model'

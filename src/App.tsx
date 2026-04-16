@@ -11,7 +11,7 @@ import {
 } from './features/browser/model'
 import { PlaybackSurface } from './features/playback/PlaybackSurface'
 import { ReplayPanel } from './features/preview/ReplayPanel'
-import type { PreviewTurn, ReplaySession } from './features/preview/ReplayPanel'
+import { buildReplaySession } from './features/preview/replay-model'
 import { ExportPreviewDialog } from './features/export/ExportPreviewDialog'
 import { ExportPanel, type ExportOptions } from './features/export/ExportPanel'
 import { createSessionReplayApiClient as createApiClient } from './lib/api'
@@ -24,13 +24,11 @@ import {
 } from './lib/editor'
 import type {
   MaterializedReplaySession,
-  ReplayRole,
   SessionCatalogStatus,
   SessionRef,
 } from './lib/api/contracts'
 import type { SessionWarning } from './lib/session'
 import { prepareTranscriptLayout } from './lib/replay/transcript-layout'
-import type { PreparedTranscriptLayout } from './lib/replay/transcript-layout-types'
 import { Sidebar, SidebarInset, SidebarProvider } from './components/ui/sidebar'
 
 const defaultFileNameFor = (session: Pick<SessionRef, 'id' | 'title'>): string => {
@@ -38,75 +36,6 @@ const defaultFileNameFor = (session: Pick<SessionRef, 'id' | 'title'>): string =
   const sanitized = base.toLowerCase().replace(/[^a-z0-9]+/g, '-')
 
   return sanitized.replace(/(^-+)|(-+$)/g, '') || 'agent-session-replay'
-}
-
-const roleForPreview = (role: ReplayRole): PreviewTurn['role'] => {
-  if (role === 'user') {
-    return 'user'
-  }
-
-  if (role === 'system') {
-    return 'system'
-  }
-
-  if (role === 'tool') {
-    return 'tool'
-  }
-
-  return 'assistant'
-}
-
-function formatTimeLabel(timestamp?: string | null): string {
-  if (!timestamp) {
-    return ''
-  }
-
-  const time = new Date(timestamp)
-  if (Number.isNaN(time.valueOf())) {
-    return timestamp
-  }
-
-  return time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-/** Maps the normalized replay payload into the lighter-weight playback view model. */
-function makeReplaySession(
-  session: MaterializedReplaySession,
-  draft: { bookmarks: Record<string, { label: string }> } | undefined,
-  transcriptLayout: PreparedTranscriptLayout,
-): ReplaySession {
-  const turns: PreviewTurn[] = session.turns.map((turn) => {
-    const isHidden = turn.included === false
-    const bookmarkLabel = draft?.bookmarks[turn.id]?.label
-    const turnLayout = transcriptLayout.turnLayoutById.get(turn.id)
-    if (!turnLayout) {
-      throw new Error(`Missing prepared transcript layout for turn ${turn.id}`)
-    }
-
-    return {
-      blocks: turn.blocks,
-      bookmarkLabel,
-      id: turn.id,
-      role: roleForPreview(turn.role),
-      isBookmarked: Boolean(bookmarkLabel),
-      isHidden,
-      previewText: turnLayout.previewText,
-      summary: turnLayout.summary,
-      timestamp: turn.timestamp ?? '',
-      timeLabel: formatTimeLabel(turn.timestamp),
-    }
-  })
-
-  return {
-    id: session.id,
-    provider: getSourceLabel(session.source),
-    project: session.project ?? 'Unknown project',
-    cwd: session.cwd ?? '',
-    title: session.title,
-    updatedAt: session.updatedAt ?? '',
-    turnCount: turns.length,
-    turns,
-  }
 }
 
 /** Resolves the API base so production exports can still talk to the local server. */
@@ -307,9 +236,20 @@ function App() {
     () => (materializedSession ? prepareTranscriptLayout(materializedSession.turns) : null),
     [materializedSession],
   )
+  const bookmarkLabelsByTurnId = useMemo(
+    () => new Map(Object.entries(loadedDraft?.bookmarks ?? {}).map(([turnId, bookmark]) => [turnId, bookmark.label])),
+    [loadedDraft?.bookmarks],
+  )
   const replaySession = useMemo(
-    () => (materializedSession && transcriptLayout ? makeReplaySession(materializedSession, loadedDraft, transcriptLayout) : null),
-    [loadedDraft, materializedSession, transcriptLayout],
+    () => (
+      materializedSession && transcriptLayout
+        ? buildReplaySession(materializedSession, transcriptLayout, {
+            bookmarkLabelsByTurnId,
+            providerLabel: getSourceLabel(materializedSession.source),
+          })
+        : null
+    ),
+    [bookmarkLabelsByTurnId, materializedSession, transcriptLayout],
   )
   const visibleTurnCount = materializedSession
     ? materializedSession.turns.filter((turn) => turn.included !== false).length

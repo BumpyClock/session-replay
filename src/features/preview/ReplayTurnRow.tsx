@@ -1,7 +1,6 @@
 import { Bookmark, Bot, ChevronDown, Eye, EyeOff, Sparkles, UserRound, Wrench } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { ReplayBlock, ReplayRole } from '../../lib/api/contracts'
 import type { ReplayRenderableBlock, ReplayRenderableTextBlock } from '../../lib/replay/context-blocks'
 import {
   getReplayToolRunLabel,
@@ -14,19 +13,7 @@ import type {
   PreparedToolRunLayout,
   PreparedTurnLayout,
 } from '../../lib/replay/transcript-layout-types'
-
-type PreviewTurn = {
-  blocks: ReplayBlock[]
-  bookmarkLabel?: string
-  id: string
-  role: ReplayRole
-  summary: string
-  timestamp: string
-  isHidden?: boolean
-  isBookmarked?: boolean
-  previewText?: string
-  timeLabel: string
-}
+import type { PreviewTurn, PreviewTurnRole } from './replay-model'
 
 export interface ReplayTurnPlaybackState {
   activeUnitId: string | null
@@ -64,7 +51,7 @@ const roleIconMap = {
   system: Sparkles,
   tool: Wrench,
   user: UserRound,
-} satisfies Record<ReplayRole, typeof Bot>
+} satisfies Record<PreviewTurnRole, typeof Bot>
 
 export function ReplayTurnRow({
   turn,
@@ -123,6 +110,8 @@ export function ReplayTurnRow({
         playback?.isPast ? 'is-playback-past' : '',
         playback?.isActive ? 'is-playback-active' : '',
       ].filter(Boolean).join(' ')}
+      data-turn-id={turn.id}
+      data-turn-index={turn.index}
       style={style}
     >
       <div className="replay-turn__icon">
@@ -301,7 +290,11 @@ function ReplaySegmentDisclosure({
     : getReplayToolRunSummaryMeta(visibleSegment)
 
   return (
-    <details className="replay-tool-group" open={isOpen}>
+    <details
+      className="replay-tool-group"
+      data-replay-group-ids={segment.blocks.map((block) => block.id).join(',')}
+      open={isOpen}
+    >
       <summary
         className="replay-tool-group__summary"
         onClick={(event) => {
@@ -353,6 +346,7 @@ function ReplayPlaybackUnit({
         shouldAnimate ? 'is-revealed' : '',
         isActive ? 'is-active' : '',
       ].filter(Boolean).join(' ')}
+      data-replay-unit-id={unitId}
     >
       {children}
     </div>
@@ -385,7 +379,11 @@ function ReplayBlockDisclosure({
   onToggle: () => void
 }) {
   return (
-    <details className={`replay-disclosure replay-disclosure--${block.type}`} open={isOpen}>
+    <details
+      className={`replay-disclosure replay-disclosure--${block.type}`}
+      data-replay-kind={block.type === 'thinking' || block.type === 'tool' ? block.type : undefined}
+      open={isOpen}
+    >
       <summary
         className="replay-disclosure__summary"
         onClick={(event) => {
@@ -429,6 +427,6 @@ function getRequiredToolRunLayout(
   return meta
 }
 
-function formatPreviewRoleLabel(role: ReplayRole): string {
+function formatPreviewRoleLabel(role: PreviewTurnRole): string {
   return `${role}:`.toUpperCase()
 }

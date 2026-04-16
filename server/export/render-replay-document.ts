@@ -1,54 +1,36 @@
 import {
-  Bookmark,
   Bot,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Pause,
   Play,
-  Sparkles,
-  UserRound,
-  Wrench,
 } from 'lucide-react'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   MaterializedReplaySession,
   ReplayRenderOptions,
-  ReplayRole,
-  ReplayTurn,
 } from '../../src/lib/api/contracts'
+import { ReplayTurnRow } from '../../src/features/preview/ReplayTurnRow'
+import { buildReplaySession } from '../../src/features/preview/replay-model'
 import {
   DEFAULT_PLAYBACK_SPEED,
   PLAYBACK_TURN_DWELL_MS,
   PLAYBACK_SPEEDS,
 } from '../../src/lib/replay/playback'
-import { type ReplayRenderableBlock, type ReplayRenderableTextBlock } from '../../src/lib/replay/context-blocks'
 import {
   createPlaybackTurnsFromLayout,
   prepareTranscriptLayout,
 } from '../../src/lib/replay/transcript-layout'
-import type {
-  PreparedBlockLayout,
-  PreparedTurnLayout,
-} from '../../src/lib/replay/transcript-layout-types'
+import type { PreparedTurnLayout } from '../../src/lib/replay/transcript-layout-types'
 import { buildExportPayload, estimateTurnHeight } from './export-payload'
-
-const roleIconMap = {
-  assistant: Bot,
-  system: Sparkles,
-  tool: Wrench,
-  user: UserRound,
-} satisfies Record<ReplayRole, typeof Bot>
 
 const PLAY_ICON = renderIconMarkup(Play, 16)
 const PAUSE_ICON = renderIconMarkup(Pause, 16)
 const PREVIOUS_ICON = renderIconMarkup(ChevronLeft, 16)
 const NEXT_ICON = renderIconMarkup(ChevronRight, 16)
 const CLOCK_ICON = renderIconMarkup(Clock, 14)
-const BOOKMARK_ICON = renderIconMarkup(Bookmark, 12)
-const CHEVRON_ICON = renderIconMarkup(ChevronDown, 12)
 
 type RenderableReplaySession = MaterializedReplaySession & {
   bookmarksByTurnIndex: Map<number, string>
@@ -68,16 +50,29 @@ export function renderReplayDocument(
   const { initialTurnIndex, session: replay } = createRenderableSession(session, options)
   const displayTitle = escapeHtml(options.exportTitle ?? replay.title)
   const layout = prepareTranscriptLayout(replay.turns)
+  const replaySession = buildReplaySession(replay, layout, {
+    bookmarkLabelsByTurnId: createBookmarkLabelsByTurnId(replay),
+  })
   const playbackTurns = createPlaybackTurnsFromLayout(replay.turns, layout)
 
   const turnHtmlById = new Map<string, string>()
   const turnHeightById = new Map<string, number>()
 
-  for (const turn of replay.turns) {
+  for (const turn of replaySession.turns) {
     const turnLayout = getRequiredTurnLayout(layout.turnLayoutById, turn.id)
-    const bookmarkLabel = replay.bookmarksByTurnIndex.get(turn.index)
-    turnHtmlById.set(turn.id, renderReplayTurnCard(turn, turnLayout, bookmarkLabel, options))
-    turnHeightById.set(turn.id, estimateTurnHeight(turnLayout, bookmarkLabel, options))
+    turnHtmlById.set(
+      turn.id,
+      renderToStaticMarkup(
+        createElement(ReplayTurnRow, {
+          expandedBlockIds: createExpandedBlockIds(turnLayout, turn.blocks, options),
+          mode: 'playback',
+          onToggleBlock: noop,
+          turn,
+          turnLayout,
+        }),
+      ),
+    )
+    turnHeightById.set(turn.id, estimateTurnHeight(turnLayout, turn.bookmarkLabel, options))
   }
 
   const payload = buildExportPayload(
@@ -280,179 +275,6 @@ function renderSessionMeta(session: Pick<RenderableReplaySession, 'project' | 's
   return `<p class="preview-block__meta-note">${escapeHtml(parts.join(' · '))}</p>`
 }
 
-function renderReplayTurnCard(
-  turn: ReplayTurn,
-  turnLayout: PreparedTurnLayout | undefined,
-  bookmarkLabel: string | undefined,
-  options: ReplayRenderOptions,
-): string {
-  if (!turnLayout) {
-    throw new Error(`Missing prepared transcript layout for turn ${turn.id}`)
-  }
-
-  const Icon = roleIconMap[turn.role]
-  const tone = turnLayout.tone
-  const summary = turnLayout.summary
-  const timeLabel = formatTimeLabel(turn.timestamp)
-  const bookmark = bookmarkLabel
-    ? `<div class="replay-turn__note-pill">
-        ${BOOKMARK_ICON}
-        ${escapeHtml(bookmarkLabel)}
-      </div>`
-    : ''
-
-  return `<li
-    class="replay-turn replay-turn--${escapeHtml(tone)}"
-    data-turn-id="${escapeHtml(turn.id)}"
-    data-turn-index="${turn.index}"
-  >
-    <div class="replay-turn__icon">
-      ${renderIconMarkup(Icon, 12)}
-    </div>
-    <div class="replay-turn__meta">
-      <div class="replay-turn__header">
-        <div class="replay-turn__top">
-          <span class="replay-turn__role-label">${escapeHtml(formatReplayRoleLabel(turn.role))}</span>
-          <span class="replay-turn__summary-inline">${escapeHtml(summary)}</span>
-        </div>
-        ${
-          timeLabel
-            ? `<time class="replay-turn__timestamp" datetime="${escapeHtml(turn.timestamp ?? '')}">${escapeHtml(timeLabel)}</time>`
-            : ''
-        }
-        ${bookmark}
-      </div>
-      <div class="replay-turn__body">
-        ${renderReplayTurnSegments(turnLayout, options)}
-      </div>
-      ${bookmarkLabel ? '<span class="replay-turn__bookmark">bookmarked</span>' : ''}
-    </div>
-  </li>`
-}
-
-function renderReplayTurnSegments(turnLayout: PreparedTurnLayout | undefined, options: ReplayRenderOptions): string {
-  if (!turnLayout) {
-    return ''
-  }
-
-  return turnLayout.segments
-    .map((segment) => {
-      if (segment.type === 'block') {
-        const blockMeta = getRequiredBlockLayout(turnLayout.blockMetaById, segment.block.id)
-        if (!blockMeta.isDisclosure) {
-          return renderReplayPlaybackUnit(
-            segment.block.id,
-            renderReplayInlineBlock(segment.block, turnLayout.blockHtml),
-          )
-        }
-
-        return renderReplayPlaybackUnit(
-          segment.block.id,
-          renderReplayBlockDisclosure(segment.block, blockMeta, turnLayout.blockHtml, options),
-        )
-      }
-
-      const toolRunMeta = turnLayout.toolRunMetaById.get(segment.id)
-      if (!toolRunMeta) {
-        throw new Error(`Missing prepared tool run layout for segment ${segment.id}`)
-      }
-
-      if (!toolRunMeta.grouped) {
-        return `<div class="replay-tool-run">
-          ${segment.blocks
-            .map((block) =>
-              renderReplayPlaybackUnit(
-                block.id,
-                renderReplayBlockDisclosure(
-                  block,
-                  getRequiredBlockLayout(turnLayout.blockMetaById, block.id),
-                  turnLayout.blockHtml,
-                  options,
-                ),
-              ),
-            )
-            .join('')}
-        </div>`
-      }
-
-      const summaryMeta = toolRunMeta.summaryMeta
-      return `<details
-        class="replay-tool-group"
-        data-replay-group-ids="${escapeHtml(segment.blocks.map((block) => block.id).join(','))}"
-      >
-        <summary class="replay-tool-group__summary">
-          ${CHEVRON_ICON}
-          <span class="replay-tool-group__label">${escapeHtml(toolRunMeta.label)}</span>
-          ${summaryMeta ? `<span class="replay-tool-group__meta">${escapeHtml(summaryMeta)}</span>` : ''}
-        </summary>
-        <div class="replay-tool-group__content">
-          ${segment.blocks
-            .map((block) =>
-              renderReplayPlaybackUnit(
-                block.id,
-                renderReplayBlockDisclosure(
-                  block,
-                  getRequiredBlockLayout(turnLayout.blockMetaById, block.id),
-                  turnLayout.blockHtml,
-                  options,
-                ),
-              ),
-            )
-            .join('')}
-        </div>
-      </details>`
-    })
-    .join('')
-}
-
-function renderReplayPlaybackUnit(unitId: string, content: string): string {
-  return `<div class="replay-playback-unit" data-replay-unit-id="${escapeHtml(unitId)}">${content}</div>`
-}
-
-function renderReplayInlineBlock(block: ReplayRenderableTextBlock, blockHtml: ReadonlyMap<string, string>): string {
-  const title =
-    block.type !== 'meta' && 'title' in block && block.title
-      ? `<div class="replay-inline-block__title">${escapeHtml(block.title)}</div>`
-      : ''
-
-  return `<div class="replay-inline-block replay-inline-block--${escapeHtml(block.type)}">
-    ${title}
-    <div class="replay-inline-block__content">${blockHtml.get(block.id) ?? ''}</div>
-  </div>`
-}
-
-function renderReplayBlockDisclosure(
-  block: ReplayRenderableBlock,
-  meta: PreparedBlockLayout,
-  blockHtml: ReadonlyMap<string, string>,
-  options: ReplayRenderOptions,
-): string {
-  const open = getReplayBlockOpenState(meta, block, options)
-  const replayKind =
-    block.type === 'thinking' ? ' data-replay-kind="thinking"' : block.type === 'tool' ? ' data-replay-kind="tool"' : ''
-
-  return `<details class="replay-disclosure replay-disclosure--${escapeHtml(block.type)}"${open ? ' open' : ''}${replayKind}>
-    <summary class="replay-disclosure__summary">
-      ${CHEVRON_ICON}
-      <span class="replay-disclosure__summary-label">${escapeHtml(meta.label)}</span>
-      ${meta.summaryMeta ? `<span class="replay-disclosure__summary-meta">${escapeHtml(meta.summaryMeta)}</span>` : ''}
-    </summary>
-    <div class="${meta.contentClassName}">${blockHtml.get(block.id) ?? ''}</div>
-  </details>`
-}
-
-function getReplayBlockOpenState(
-  meta: PreparedBlockLayout,
-  block: ReplayRenderableBlock,
-  options: ReplayRenderOptions,
-): boolean {
-  if (block.type === 'thinking' && (options.revealThinking ?? false)) {
-    return true
-  }
-
-  return meta.defaultOpen
-}
-
 function getRequiredTurnLayout(
   turnLayoutById: ReadonlyMap<string, PreparedTurnLayout>,
   turnId: string,
@@ -463,18 +285,6 @@ function getRequiredTurnLayout(
   }
 
   return turnLayout
-}
-
-function getRequiredBlockLayout(
-  blockMetaById: ReadonlyMap<string, PreparedBlockLayout>,
-  blockId: string,
-): PreparedBlockLayout {
-  const meta = blockMetaById.get(blockId)
-  if (!meta) {
-    throw new Error(`Missing prepared block layout for block ${blockId}`)
-  }
-
-  return meta
 }
 
 function clampTurnIndex(value: number, turnCount: number): number {
@@ -517,22 +327,38 @@ function resolveInitialTurnIndex(
   return 0
 }
 
-function formatReplayRoleLabel(role: ReplayTurn['role']): string {
-  return `${role}:`.toUpperCase()
-}
+function createBookmarkLabelsByTurnId(session: RenderableReplaySession): Map<string, string> {
+  const labelsByTurnId = new Map<string, string>()
 
-function formatTimeLabel(timestamp?: string): string {
-  if (!timestamp) {
-    return ''
+  for (const bookmark of session.bookmarks ?? []) {
+    const turnId = session.turns[bookmark.turnIndex]?.id
+    if (turnId) {
+      labelsByTurnId.set(turnId, bookmark.label)
+    }
   }
 
-  const time = new Date(timestamp)
-  if (Number.isNaN(time.valueOf())) {
-    return timestamp
+  return labelsByTurnId
+}
+
+function createExpandedBlockIds(
+  turnLayout: PreparedTurnLayout,
+  blocks: readonly MaterializedReplaySession['turns'][number]['blocks'],
+  options: ReplayRenderOptions,
+): Set<string> {
+  const expandedBlockIds = new Set(turnLayout.defaultOpenIds)
+
+  if (options.revealThinking ?? false) {
+    for (const block of blocks) {
+      if (block.type === 'thinking') {
+        expandedBlockIds.add(block.id)
+      }
+    }
   }
 
-  return time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return expandedBlockIds
 }
+
+function noop() {}
 
 function formatDateLabel(timestamp: string): string {
   const value = new Date(timestamp)

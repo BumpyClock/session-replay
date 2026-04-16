@@ -1005,6 +1005,7 @@ small {
   transition: transform 160ms ease;
 }
 
+.replay-disclosure[open] > .replay-disclosure__summary .replay-disclosure__chevron,
 .replay-disclosure__chevron.is-open {
   transform: rotate(180deg);
 }
@@ -1109,6 +1110,7 @@ small {
   transition: transform 160ms ease;
 }
 
+.replay-tool-group[open] > .replay-tool-group__summary .replay-tool-group__chevron,
 .replay-tool-group__chevron.is-open {
   transform: rotate(180deg);
 }
