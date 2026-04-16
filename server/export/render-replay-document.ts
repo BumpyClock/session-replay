@@ -33,7 +33,7 @@ import type {
   PreparedBlockLayout,
   PreparedTurnLayout,
 } from '../../src/lib/replay/transcript-layout-types'
-import { buildExportPayload, estimateTurnHeight, TURN_GAP_PX } from './export-payload'
+import { buildExportPayload, estimateTurnHeight } from './export-payload'
 
 const roleIconMap = {
   assistant: Bot,
@@ -57,9 +57,9 @@ type RenderableReplaySession = MaterializedReplaySession & {
 /**
  * Renders a self-contained replay document that mirrors the in-editor playback preview.
  *
- * Turn content is serialized into a JSON payload and materialized on demand
- * by a client-side virtual list, so the initial DOM never contains the full
- * transcript regardless of session size.
+ * The full transcript shell is rendered directly into the exported HTML, and a
+ * lightweight client-side playback controller uses the embedded payload to
+ * drive reveal state and controls inside the single-file document.
  */
 export function renderReplayDocument(
   session: MaterializedReplaySession,
@@ -125,7 +125,9 @@ export function renderReplayDocument(
               <p>No turns available in this export.</p>
               <p class="preview-block__hint">Adjust export filters in editor mode if you expected more transcript content.</p>
             </div>`
-                : '<ul class="preview-block__transcript preview-block__transcript--virtual" data-virtual-transcript></ul>'
+                : `<ul class="preview-block__transcript" data-playback-transcript>${replay.turns
+                  .map((turn) => turnHtmlById.get(turn.id) ?? '')
+                  .join('')}</ul>`
             }
           </div>
           <div class="preview-block__dock" role="toolbar" aria-label="Playback controls">
@@ -708,7 +710,8 @@ code {
 
 .export-page__preview {
   width: min(100%, 1040px);
-  min-height: calc(100svh - 32px);
+  height: calc(100svh - 32px);
+  max-height: calc(100svh - 32px);
   display: flex;
   flex-direction: column;
 }
@@ -726,6 +729,8 @@ code {
 .preview-block--export {
   position: relative;
   isolation: isolate;
+  flex: 1;
+  min-height: 0;
 }
 
 .preview-block__header {
@@ -814,18 +819,6 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.preview-block__transcript--virtual {
-  display: block;
-  position: relative;
-  min-height: 100%;
-}
-
-.preview-block__transcript--virtual > .replay-turn {
-  position: absolute;
-  left: 0;
-  right: 0;
 }
 
 .preview-block__empty {
@@ -1490,9 +1483,8 @@ function buildRuntime({
   const defaultSpeedIndex = Math.max(speeds.indexOf(DEFAULT_PLAYBACK_SPEED), 0)
 
   // Export runtime stays self-contained. It reads the serialized payload from
-  // a JSON script tag and uses a lightweight virtual list to materialize only
-  // the visible turn rows plus overscan, so the DOM stays small even for
-  // sessions with thousands of turns.
+  // a JSON script tag and drives playback against the server-rendered
+  // transcript so long rows keep their natural document flow.
   return `(function () {
   var payloadEl = document.getElementById('replay-payload');
   if (!payloadEl) { return; }
@@ -1504,10 +1496,8 @@ function buildRuntime({
   var pauseIcon = ${JSON.stringify(pauseIcon)};
   var speeds = ${JSON.stringify(speeds)};
   var defaultSpeedIndex = ${defaultSpeedIndex};
-  var turnGap = ${TURN_GAP_PX};
-  var overscan = 3;
   var content = document.querySelector('[data-playback-content]');
-  var virtualRoot = document.querySelector('[data-virtual-transcript]');
+  var transcript = document.querySelector('[data-playback-transcript]');
   var playButton = document.querySelector('[data-action="toggle-play"]');
   var previousButton = document.querySelector('[data-action="prev"]');
   var nextButton = document.querySelector('[data-action="next"]');
@@ -1517,28 +1507,12 @@ function buildRuntime({
   var turnIndex = 0;
   var timer = null;
   var initialScrollDone = false;
-  var scrollFrame = null;
   var visibleUnitIds = new Set();
-  var renderedRange = { start: -1, end: -1 };
+  var turnNodes = transcript ? Array.from(transcript.querySelectorAll('.replay-turn')) : [];
   var turnIndexById = {};
   for (var i = 0; i < playbackTurns.length; i++) {
     turnIndexById[playbackTurns[i].turnId] = i;
   }
-
-  var rowHeights = turns.map(function (t) { return t.estimatedHeight; });
-  var rowOffsets = [];
-  var totalHeight = 0;
-
-  function computeOffsets() {
-    rowOffsets = [];
-    var offset = 0;
-    for (var idx = 0; idx < rowHeights.length; idx++) {
-      rowOffsets.push(offset);
-      offset += rowHeights[idx] + turnGap;
-    }
-    totalHeight = rowHeights.length > 0 ? offset - turnGap : 0;
-  }
-  computeOffsets();
 
   function clearTimer() {
     if (timer !== null) { window.clearTimeout(timer); timer = null; }
@@ -1626,53 +1600,13 @@ function buildRuntime({
     return Math.min(turnIndex + 1, turns.length);
   }
 
-  function getEffectiveTotalHeight() {
-    var count = getEffectiveTurnCount();
-    if (count === 0) { return 0; }
-    return rowOffsets[count - 1] + rowHeights[count - 1];
-  }
-
-  function findVisibleRange(scrollTop, viewportHeight) {
-    var count = getEffectiveTurnCount();
-    if (count === 0) { return { start: 0, end: -1 }; }
-    var lo = 0;
-    var hi = count - 1;
-    while (lo < hi) {
-      var mid = (lo + hi) >>> 1;
-      if (rowOffsets[mid] + rowHeights[mid] <= scrollTop) { lo = mid + 1; }
-      else { hi = mid; }
+  function findTurnNode(targetIndex) {
+    for (var idx = 0; idx < turnNodes.length; idx++) {
+      if (Number(turnNodes[idx].dataset.turnIndex || '-1') === targetIndex) {
+        return turnNodes[idx];
+      }
     }
-    var startIdx = lo;
-    var endIdx = startIdx;
-    while (endIdx < count - 1 && rowOffsets[endIdx] < scrollTop + viewportHeight) {
-      endIdx++;
-    }
-    startIdx = Math.max(0, startIdx - overscan);
-    endIdx = Math.min(count - 1, endIdx + overscan);
-    return { start: startIdx, end: endIdx };
-  }
-
-  function injectRowPosition(html, top) {
-    return html.replace('<li ', '<li style="left:0;position:absolute;right:0;top:' + top + 'px;" ');
-  }
-
-  function renderWindow() {
-    if (!virtualRoot || !content) { return; }
-    var effectiveHeight = getEffectiveTotalHeight();
-    var scrollTop = content.scrollTop;
-    var viewportHeight = content.clientHeight || window.innerHeight || 0;
-    var range = findVisibleRange(scrollTop, viewportHeight);
-    if (range.start === renderedRange.start && range.end === renderedRange.end && virtualRoot.style.height === effectiveHeight + 'px') {
-      return;
-    }
-    var rows = [];
-    for (var idx = range.start; idx <= range.end; idx++) {
-      if (!shouldDisplayTurn(idx)) { continue; }
-      rows.push(injectRowPosition(turns[idx].html, rowOffsets[idx] || 0));
-    }
-    virtualRoot.style.height = effectiveHeight + 'px';
-    virtualRoot.innerHTML = rows.join('');
-    renderedRange = { start: range.start, end: range.end };
+    return null;
   }
 
   function syncTurnUnits(node, playbackIndex) {
@@ -1706,12 +1640,9 @@ function buildRuntime({
   function sync() {
     var playbackStarted = mode !== 'idle';
     var activeTurnId = playbackTurns[turnIndex] ? playbackTurns[turnIndex].turnId : null;
-
-    renderWindow();
-
-    var turnNodes = virtualRoot ? Array.from(virtualRoot.querySelectorAll('.replay-turn')) : [];
     turnNodes.forEach(function (node) {
       var pbIdx = turnIndexById[node.dataset.turnId || ''];
+      node.hidden = pbIdx !== undefined ? !shouldDisplayTurn(pbIdx) : mode !== 'idle';
       var isPast = playbackStarted && pbIdx !== undefined && pbIdx < turnIndex;
       var isActive = playbackStarted && pbIdx === turnIndex;
       node.classList.toggle('is-playback-past', isPast);
@@ -1738,11 +1669,12 @@ function buildRuntime({
       if (!content) { return; }
 
       if (!initialScrollDone) {
-        var initIdx = Math.min(initialTurnIndex, Math.max(0, rowOffsets.length - 1));
-        var initOffset = rowOffsets[initIdx] || 0;
-        content.scrollTo({ behavior: 'auto', top: Math.max(0, initOffset - Math.max(0, content.clientHeight - 160)) });
+        var initNode = findTurnNode(Math.min(initialTurnIndex, Math.max(0, turns.length - 1)));
+        if (initNode) {
+          var initBottom = initNode.offsetTop + initNode.offsetHeight;
+          content.scrollTo({ behavior: 'auto', top: Math.max(0, initBottom - Math.max(0, content.clientHeight - 160)) });
+        }
         initialScrollDone = true;
-        renderWindow();
         return;
       }
 
@@ -1750,10 +1682,12 @@ function buildRuntime({
 
       var activeIndex = activeTurnId !== null ? turnIndexById[activeTurnId] : undefined;
       if (activeIndex !== undefined) {
-        var activeOffset = rowOffsets[activeIndex] || 0;
+        var activeNode = findTurnNode(activeIndex);
+        if (!activeNode) { return; }
+        var activeBottom = activeNode.offsetTop + activeNode.offsetHeight;
         content.scrollTo({
-          behavior: mode === 'playing' ? 'smooth' : 'auto',
-          top: Math.max(0, activeOffset - Math.max(0, content.clientHeight - 160)),
+          behavior: 'auto',
+          top: Math.max(0, activeBottom - Math.max(0, content.clientHeight - 160)),
         });
       }
     });
@@ -1822,17 +1756,6 @@ function buildRuntime({
     });
   }
 
-  if (content) {
-    content.addEventListener('scroll', function () {
-      if (scrollFrame !== null) { window.cancelAnimationFrame(scrollFrame); }
-      scrollFrame = window.requestAnimationFrame(function () {
-        scrollFrame = null;
-        renderWindow();
-      });
-    }, { passive: true });
-  }
-
   sync();
 }())`
 }
-

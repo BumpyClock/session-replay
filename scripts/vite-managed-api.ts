@@ -34,12 +34,23 @@ async function canReachApi(healthUrl: string): Promise<boolean> {
   }
 }
 
-function getApiCommand(): [string, string[]] {
-  if (process.versions.bun) {
-    return [process.execPath, ['run', 'server/dev.ts']]
+/**
+ * Launches the managed API in Bun watch mode so server-side export changes
+ * propagate into the running dev app without a manual API restart.
+ */
+export function buildManagedApiCommand(
+  isBunRuntime: boolean,
+  execPath: string,
+): [string, string[]] {
+  if (isBunRuntime) {
+    return [execPath, ['--watch', 'server/dev.ts']]
   }
 
-  return ['bun', ['run', 'server/dev.ts']]
+  return ['bun', ['--watch', 'server/dev.ts']]
+}
+
+function getApiCommand(): [string, string[]] {
+  return buildManagedApiCommand(Boolean(process.versions.bun), process.execPath)
 }
 
 async function stopManagedChild(child: ChildProcess): Promise<void> {
@@ -87,6 +98,8 @@ async function waitForApiReady(healthUrl: string, child?: ChildProcess): Promise
   throw new Error(`[vite-api] API did not become ready within ${API_READY_TIMEOUT_MS}ms (${healthUrl})`)
 }
 
+// Reuse an already reachable local API when one exists; otherwise spawn and
+// own a managed child process for the Vite session and wait for readiness.
 async function ensureApiState(apiBaseUrl: string): Promise<ApiState> {
   const healthUrl = new URL(API_HEALTH_PATH, apiBaseUrl).toString()
 

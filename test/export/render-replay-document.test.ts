@@ -1,3 +1,4 @@
+import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 import type { MaterializedReplaySession } from '../../src/lib/api/contracts'
 import { renderReplayDocument } from '../../server/export/render-replay-document'
@@ -93,6 +94,39 @@ function createFixtureSession(): MaterializedReplaySession {
   }
 }
 
+async function createExportDom(html: string): Promise<JSDOM> {
+  const dom = new JSDOM(html, {
+    pretendToBeVisual: true,
+    runScripts: 'dangerously',
+    beforeParse(window) {
+      window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      }) as typeof window.requestAnimationFrame
+      window.cancelAnimationFrame = (() => {}) as typeof window.cancelAnimationFrame
+      Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
+        configurable: true,
+        value(this: HTMLElement, arg1: ScrollToOptions | number, arg2?: number) {
+          const top = typeof arg1 === 'object'
+            ? (arg1.top ?? 0)
+            : (arg2 ?? 0)
+          Object.defineProperty(this, 'scrollTop', {
+            configurable: true,
+            value: top,
+            writable: true,
+          })
+        },
+      })
+    },
+  })
+
+  await new Promise((resolve) => {
+    dom.window.setTimeout(resolve, 0)
+  })
+
+  return dom
+}
+
 describe('renderReplayDocument', () => {
   it('uses the same preview shell as the in-editor playback view', () => {
     const html = renderReplayDocument(createFixtureSession(), {
@@ -100,13 +134,16 @@ describe('renderReplayDocument', () => {
       initialTurnIndex: 2,
     })
 
-    expect(html).toContain('data-virtual-transcript')
+    expect(html).toContain('data-playback-transcript')
+    expect(html).not.toContain('data-virtual-transcript')
     expect(html).toContain('data-turn-index=\\"0\\"')
     expect(html).toContain('data-turn-index=\\"1\\"')
     expect(html).not.toContain('data-turn-index=\\"2\\"')
     expect(html).not.toContain('Thinking step')
     expect(html).toContain('class="preview-block preview-block--export"')
     expect(html).toContain('class="preview-block__dock" role="toolbar" aria-label="Playback controls"')
+    expect(html).not.toContain('preview-block__transcript--virtual')
+    expect(html).toContain('.export-page__preview {\n  width: min(100%, 1040px);\n  height: calc(100svh - 32px);')
     expect(html).toContain('replay-turn replay-turn--tool')
     expect(html).toContain('replay-turn__note-pill')
     expect(html).toContain('Answer')
@@ -243,5 +280,31 @@ describe('renderReplayDocument', () => {
     expect(html).toContain('2 tool calls')
     expect(html).toContain('Read, Bash')
     expect(html).not.toContain('data-action="toggle-thinking"')
+  })
+
+  it('keeps export playback controls interactive without virtual transcript positioning', async () => {
+    const html = renderReplayDocument(createFixtureSession(), {
+      includeThinking: false,
+      initialTurnIndex: 1,
+    })
+    const dom = await createExportDom(html)
+    const { document } = dom.window
+
+    const transcript = document.querySelector('[data-playback-transcript]')
+    const playButton = document.querySelector('[data-action="toggle-play"]') as HTMLButtonElement | null
+    const turnNodes = Array.from(document.querySelectorAll('.replay-turn')) as HTMLLIElement[]
+
+    expect(transcript).not.toBeNull()
+    expect(transcript?.classList.contains('preview-block__transcript--virtual')).toBe(false)
+    expect(playButton?.getAttribute('aria-label')).toBe('Play transcript')
+    expect(turnNodes).toHaveLength(2)
+    expect(turnNodes.every((node) => !node.hidden)).toBe(true)
+    expect(turnNodes.every((node) => !node.getAttribute('style')?.includes('position:absolute'))).toBe(true)
+
+    playButton?.click()
+
+    expect(playButton?.getAttribute('aria-label')).toBe('Pause playback')
+    expect(turnNodes[0]?.hidden).toBe(false)
+    expect(turnNodes[1]?.hidden).toBe(true)
   })
 })
