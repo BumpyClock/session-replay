@@ -1,3 +1,5 @@
+import React, { useEffect } from 'react'
+import { act, render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import {
   computeAnchorCorrection,
@@ -7,7 +9,9 @@ import {
   estimateTurnRowHeight,
   ROW_CHROME_HEIGHT,
   VIRTUALIZATION_THRESHOLD,
+  useVirtualTranscript,
   type RowMeasurement,
+  type VirtualTranscriptResult,
 } from '../../src/features/preview/useVirtualTranscript'
 import { prepareTranscriptLayout } from '../../src/lib/replay/transcript-layout'
 import type { PreparedTurnLayout } from '../../src/lib/replay/transcript-layout-types'
@@ -30,6 +34,32 @@ function makeTurnLayout(id: string, text: string): PreparedTurnLayout {
     { id, blocks: [{ id: `${id}-block`, type: 'text' as const, text }] },
   ])
   return layout.turns[0]
+}
+
+function VirtualTranscriptHarness({
+  activeTurnIndex,
+  onReady,
+  preserveActiveTurnAnchor,
+  turnLayouts,
+}: {
+  activeTurnIndex: number
+  onReady: (result: VirtualTranscriptResult) => void
+  preserveActiveTurnAnchor: boolean
+  turnLayouts: readonly PreparedTurnLayout[]
+}) {
+  const virtualTranscript = useVirtualTranscript({
+    turnLayouts,
+    visibleTurnIds: null,
+    activeTurnIndex,
+    preserveActiveTurnAnchor,
+    enabled: true,
+  })
+
+  useEffect(() => {
+    onReady(virtualTranscript)
+  }, [onReady, virtualTranscript])
+
+  return React.createElement('div', { ref: virtualTranscript.containerRef })
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +213,68 @@ describe('computeAnchorCorrection', () => {
     const updated = makeRows([120, 80, 100, 100])
     // Anchor at 3: old offset = 300, new offset = 300 (net change 0)
     expect(computeAnchorCorrection(3, old, updated)).toBe(0)
+  })
+})
+
+describe('useVirtualTranscript', () => {
+  it('adjusts scroll position when the active row height changes', () => {
+    const turnLayouts = [
+      makeTurnLayout('turn-0', 'one'),
+      makeTurnLayout('turn-1', 'two'),
+      makeTurnLayout('turn-2', 'three'),
+    ]
+
+    let latestResult: VirtualTranscriptResult | null = null
+    const { container } = render(React.createElement(VirtualTranscriptHarness, {
+      activeTurnIndex: 1,
+      onReady: (result: VirtualTranscriptResult) => {
+        latestResult = result
+      },
+      preserveActiveTurnAnchor: true,
+      turnLayouts,
+    }))
+
+    const scrollContainer = container.firstElementChild as HTMLDivElement
+    Object.defineProperty(scrollContainer, 'scrollTop', { configurable: true, value: 120, writable: true })
+
+    expect(latestResult).not.toBeNull()
+
+    act(() => {
+      const currentHeight = latestResult?.rowHeights[1]?.height ?? 0
+      latestResult?.reportRowHeight(1, currentHeight + 50)
+    })
+
+    expect(scrollContainer.scrollTop).toBe(170)
+  })
+
+  it('does not adjust scroll position when active-turn anchoring is disabled', () => {
+    const turnLayouts = [
+      makeTurnLayout('turn-0', 'one'),
+      makeTurnLayout('turn-1', 'two'),
+      makeTurnLayout('turn-2', 'three'),
+    ]
+
+    let latestResult: VirtualTranscriptResult | null = null
+    const { container } = render(React.createElement(VirtualTranscriptHarness, {
+      activeTurnIndex: 2,
+      onReady: (result: VirtualTranscriptResult) => {
+        latestResult = result
+      },
+      preserveActiveTurnAnchor: false,
+      turnLayouts,
+    }))
+
+    const scrollContainer = container.firstElementChild as HTMLDivElement
+    Object.defineProperty(scrollContainer, 'scrollTop', { configurable: true, value: 120, writable: true })
+
+    expect(latestResult).not.toBeNull()
+
+    act(() => {
+      const currentHeight = latestResult?.rowHeights[0]?.height ?? 0
+      latestResult?.reportRowHeight(0, currentHeight + 50)
+    })
+
+    expect(scrollContainer.scrollTop).toBe(120)
   })
 })
 

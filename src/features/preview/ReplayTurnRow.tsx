@@ -41,14 +41,18 @@ export interface ReplayTurnRowProps {
   turn: PreviewTurn
   turnLayout: PreparedTurnLayout
   expandedBlockIds: ReadonlySet<string>
-  editingNoteTurnId: string | null
-  noteDraft: string
+  /** Active note-editing turn id. Ignored in playback mode. */
+  editingNoteTurnId?: string | null
+  /** Current note draft text. Ignored in playback mode. */
+  noteDraft?: string
   playback?: ReplayTurnPlaybackState
+  /** Controls which affordances are rendered. Editor shows full editing UI; playback hides edit controls and shows bookmark labels as read-only callouts. */
+  mode?: 'editor' | 'playback'
   style?: CSSProperties
-  onBookmarkDraftChange: (value: string) => void
-  onBookmarkSubmit: () => void
-  onBookmarkCancel: () => void
-  onOpenBookmark: (turn: PreviewTurn) => void
+  onBookmarkDraftChange?: (value: string) => void
+  onBookmarkSubmit?: () => void
+  onBookmarkCancel?: () => void
+  onOpenBookmark?: (turn: PreviewTurn) => void
   onToggleBlock: (id: string) => void
   onToggleTurnIncluded?: (turnId: string) => void
   onMeasure?: (height: number) => void
@@ -66,9 +70,10 @@ export function ReplayTurnRow({
   turn,
   turnLayout,
   expandedBlockIds,
-  editingNoteTurnId,
-  noteDraft,
+  editingNoteTurnId = null,
+  noteDraft = '',
   playback,
+  mode = 'editor',
   style,
   onBookmarkDraftChange,
   onBookmarkSubmit,
@@ -81,10 +86,8 @@ export function ReplayTurnRow({
 }: ReplayTurnRowProps) {
   const rowRef = useRef<HTMLLIElement | null>(null)
   const Icon = roleIconMap[turn.role]
-  const isEditingNote = editingNoteTurnId === turn.id
-  const preservesFuturePlaybackSpace = Boolean(
-    playback && !playback.isPast && !playback.isActive && !playback.revealAll,
-  )
+  const isEditorMode = mode === 'editor'
+  const isEditingNote = isEditorMode && editingNoteTurnId === turn.id
 
   useEffect(() => {
     const node = rowRef.current
@@ -93,11 +96,9 @@ export function ReplayTurnRow({
     }
 
     onTurnNode?.(turn.id, node)
-    if (!preservesFuturePlaybackSpace) {
-      onMeasure?.(node.getBoundingClientRect().height)
-    }
+    onMeasure?.(node.getBoundingClientRect().height)
 
-    if (typeof ResizeObserver === 'undefined' || !onMeasure || preservesFuturePlaybackSpace) {
+    if (typeof ResizeObserver === 'undefined' || !onMeasure) {
       return () => onTurnNode?.(turn.id, null)
     }
 
@@ -110,7 +111,7 @@ export function ReplayTurnRow({
       observer.disconnect()
       onTurnNode?.(turn.id, null)
     }
-  }, [onMeasure, onTurnNode, turn.id, turnLayout, expandedBlockIds, playback, isEditingNote, noteDraft, preservesFuturePlaybackSpace])
+  }, [onMeasure, onTurnNode, turn.id, turnLayout, expandedBlockIds, playback, isEditingNote, noteDraft])
 
   return (
     <li
@@ -132,24 +133,26 @@ export function ReplayTurnRow({
           <div className="replay-turn__top">
             <span className="replay-turn__role-label">{formatPreviewRoleLabel(turn.role)}</span>
             <span className="replay-turn__summary-inline">{turn.summary}</span>
-            <div className="replay-turn__controls">
-              <button
-                aria-label={turn.bookmarkLabel ? 'Edit bookmark note' : 'Add bookmark note'}
-                className={`replay-turn__icon-button ${turn.isBookmarked ? 'is-active' : ''}`}
-                type="button"
-                onClick={() => onOpenBookmark(turn)}
-              >
-                <Bookmark size={14} strokeWidth={1.8} />
-              </button>
-              <button
-                aria-label={turn.isHidden ? 'Show turn in preview and export' : 'Hide turn from preview and export'}
-                className={`replay-turn__icon-button ${turn.isHidden ? 'is-active' : ''}`}
-                type="button"
-                onClick={() => onToggleTurnIncluded?.(turn.id)}
-              >
-                {turn.isHidden ? <Eye size={14} strokeWidth={1.8} /> : <EyeOff size={14} strokeWidth={1.8} />}
-              </button>
-            </div>
+            {isEditorMode ? (
+              <div className="replay-turn__controls">
+                <button
+                  aria-label={turn.bookmarkLabel ? 'Edit bookmark note' : 'Add bookmark note'}
+                  className={`replay-turn__icon-button ${turn.isBookmarked ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() => onOpenBookmark?.(turn)}
+                >
+                  <Bookmark size={14} strokeWidth={1.8} />
+                </button>
+                <button
+                  aria-label={turn.isHidden ? 'Show turn in preview and export' : 'Hide turn from preview and export'}
+                  className={`replay-turn__icon-button ${turn.isHidden ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() => onToggleTurnIncluded?.(turn.id)}
+                >
+                  {turn.isHidden ? <Eye size={14} strokeWidth={1.8} /> : <EyeOff size={14} strokeWidth={1.8} />}
+                </button>
+              </div>
+            ) : null}
           </div>
           {turn.timeLabel ? <p className="replay-turn__timestamp">{turn.timeLabel}</p> : null}
           {isEditingNote ? (
@@ -161,29 +164,36 @@ export function ReplayTurnRow({
                 placeholder="Add note for export bookmark"
                 value={noteDraft}
                 onBlur={onBookmarkSubmit}
-                onChange={(event) => onBookmarkDraftChange(event.target.value)}
+                onChange={(event) => onBookmarkDraftChange?.(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
-                    onBookmarkSubmit()
+                    onBookmarkSubmit?.()
                   }
 
                   if (event.key === 'Escape') {
                     event.preventDefault()
-                    onBookmarkCancel()
+                    onBookmarkCancel?.()
                   }
                 }}
               />
             </div>
           ) : turn.bookmarkLabel ? (
-            <button
-              className="replay-turn__note-pill"
-              type="button"
-              onClick={() => onOpenBookmark(turn)}
-            >
-              <Bookmark size={12} strokeWidth={1.8} />
-              {turn.bookmarkLabel}
-            </button>
+            isEditorMode ? (
+              <button
+                className="replay-turn__note-pill"
+                type="button"
+                onClick={() => onOpenBookmark?.(turn)}
+              >
+                <Bookmark size={12} strokeWidth={1.8} />
+                {turn.bookmarkLabel}
+              </button>
+            ) : (
+              <span className="replay-turn__note-pill" aria-label="Bookmark note">
+                <Bookmark size={12} strokeWidth={1.8} />
+                {turn.bookmarkLabel}
+              </span>
+            )
           ) : null}
         </div>
         {turn.isHidden ? (
@@ -192,11 +202,8 @@ export function ReplayTurnRow({
             <p className="replay-turn__collapsed-text">{turn.previewText ?? turn.summary}</p>
           </div>
         ) : (
-          <div
-            aria-hidden={preservesFuturePlaybackSpace ? 'true' : undefined}
-            className={`replay-turn__body${preservesFuturePlaybackSpace ? ' replay-turn__body--placeholder' : ''}`}
-          >
-            {preservesFuturePlaybackSpace ? null : turnLayout.segments.map((segment) => (
+          <div className="replay-turn__body">
+            {turnLayout.segments.map((segment) => (
               <ReplaySegmentDisclosure
                 key={segment.id}
                 blockHtml={turnLayout.blockHtml}

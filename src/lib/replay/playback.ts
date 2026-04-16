@@ -4,6 +4,7 @@ import { createReplaySegments, type ReplaySegment } from './segments'
 
 export const PLAYBACK_SPEEDS = [1, 2, 4, 8] as const
 export const DEFAULT_PLAYBACK_SPEED = 4
+const PLAYBACK_MIN_UNIT_DELAY_MS = 60
 
 /**
  * Base pause between completed turns before advancing to next visible turn.
@@ -90,7 +91,7 @@ export function getNextPlaybackDelay(
 
   const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
   if (nextUnit) {
-    return Math.max(60, Math.round(nextUnit.delayMs / playbackSpeed))
+    return Math.max(PLAYBACK_MIN_UNIT_DELAY_MS, Math.round(nextUnit.delayMs / playbackSpeed))
   }
 
   if (turnIndex < turns.length - 1) {
@@ -100,7 +101,7 @@ export function getNextPlaybackDelay(
   return null
 }
 
-/** Reveals next unit or advances to next turn; `null` means playback is complete. */
+/** Reveals the next unit of the current turn or advances to the next turn; `null` means playback is complete. */
 export function getNextPlaybackState(
   turns: readonly ReplayPlaybackTurnPlan[],
   turnIndex: number,
@@ -121,6 +122,7 @@ export function getNextPlaybackState(
     }
   }
 
+  // Advance to the next turn; its units are revealed on subsequent ticks.
   if (turnIndex < turns.length - 1) {
     return {
       revealedUnitIds: new Set(visibleUnitIds),
@@ -131,7 +133,7 @@ export function getNextPlaybackState(
   return null
 }
 
-/** Hides most recent unit or moves back one turn; `null` means already at start. */
+/** Hides the most recent unit first, then moves back one turn; `null` means already at start. */
 export function getPreviousPlaybackState(
   turns: readonly ReplayPlaybackTurnPlan[],
   turnIndex: number,

@@ -680,13 +680,9 @@ small {
   display: flex;
   flex: 1;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   min-height: 100%;
   min-width: 0;
-}
-
-.preview-block__stage--idle {
-  justify-content: flex-start;
 }
 
 .preview-block__content--idle {
@@ -706,6 +702,16 @@ small {
 .preview-block__transcript--virtual {
   display: block;
   min-height: 100%;
+}
+
+/* Playback explicit viewport states — replace implicit CSS layout coupling */
+.preview-block__stage[data-viewport-state="underflow-bottom-anchored"] {
+  justify-content: flex-end;
+}
+
+.preview-block__stage[data-viewport-state="overflow-scrollable"],
+.preview-block__stage[data-viewport-state="user-detached"] {
+  justify-content: flex-start;
 }
 
 .preview-block__empty {

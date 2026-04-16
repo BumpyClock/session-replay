@@ -1,21 +1,12 @@
-import { Clock, Download, Eye, Pause, Play, Settings2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Clock, Download, Eye, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReplayBlock, ReplayRole } from '../../lib/api/contracts'
 import {
-  DEFAULT_PLAYBACK_SPEED,
-  getActivePlaybackUnitId,
-  getNextPlaybackDelay,
-  getNextPlaybackState,
-  getPreviousPlaybackState,
-  PLAYBACK_SPEEDS,
-} from '../../lib/replay/playback'
-import {
   collectDefaultOpenIds,
-  createPlaybackTurnsFromLayout,
   prepareTranscriptLayout,
 } from '../../lib/replay/transcript-layout'
 import type { PreparedTranscriptLayout } from '../../lib/replay/transcript-layout-types'
-import { ReplayTurnRow, type ReplayTurnPlaybackState } from './ReplayTurnRow'
+import { ReplayTurnRow } from './ReplayTurnRow'
 import { ROW_GAP_PX, useVirtualTranscript, VIRTUALIZATION_THRESHOLD } from './useVirtualTranscript'
 
 export type PreviewTurnRole = ReplayRole
@@ -55,10 +46,9 @@ export type ReplayPanelProps = {
   onBookmarkChange?: (turnId: string, nextLabel: string) => void
   onOpenExportSettings?: () => void
   onOpenPreview?: () => void
+  onStartPlayback?: () => void
   onToggleTurnIncluded?: (turnId: string) => void
 }
-
-type PlaybackMode = 'idle' | 'paused' | 'playing'
 
 function ReplayPanel({
   canExport,
@@ -71,23 +61,15 @@ function ReplayPanel({
   onBookmarkChange,
   onOpenExportSettings,
   onOpenPreview,
+  onStartPlayback,
   onToggleTurnIncluded,
 }: ReplayPanelProps) {
+  const sessionId = session?.id ?? null
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(new Set())
   const [editingNoteTurnId, setEditingNoteTurnId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
-  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle')
-  const [playbackAutoFollow, setPlaybackAutoFollow] = useState(true)
-  const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(() => {
-    const defaultIndex = PLAYBACK_SPEEDS.indexOf(DEFAULT_PLAYBACK_SPEED)
-    return defaultIndex >= 0 ? defaultIndex : 0
-  })
-  const [playbackTurnIndex, setPlaybackTurnIndex] = useState(0)
-  const [revealedUnitIds, setRevealedUnitIds] = useState<Set<string>>(new Set())
   const contentRef = useRef<HTMLDivElement | null>(null)
   const turnRefs = useRef<Record<string, HTMLLIElement | null>>({})
-  const programmaticScrollRef = useRef(false)
-  const programmaticScrollTimeoutRef = useRef<number | null>(null)
 
   const layout = useMemo(
     () => externalLayout ?? (session ? prepareTranscriptLayout(session.turns) : null),
@@ -95,50 +77,15 @@ function ReplayPanel({
   )
 
   useEffect(() => {
-    if (!session || !layout) {
+    if (!sessionId || !layout) {
       setExpandedBlockIds(new Set())
       setEditingNoteTurnId(null)
       setNoteDraft('')
-      setPlaybackMode('idle')
-      setPlaybackAutoFollow(true)
-      setPlaybackTurnIndex(0)
-      setRevealedUnitIds(new Set())
       return
     }
 
     setExpandedBlockIds(collectDefaultOpenIds(layout))
-    setPlaybackAutoFollow(true)
-  }, [layout, session?.id])
-
-  const playbackTurns = useMemo(
-    () => {
-      if (!session || !layout) {
-        return []
-      }
-
-      const visibleTurns = session.turns.filter((turn) => !turn.isHidden)
-      return createPlaybackTurnsFromLayout(visibleTurns, layout)
-    },
-    [session, layout],
-  )
-  const playbackTurnIndexById = useMemo(
-    () => new Map(playbackTurns.map((turn, index) => [turn.turnId, index])),
-    [playbackTurns],
-  )
-  const playbackSpeed = PLAYBACK_SPEEDS[playbackSpeedIndex] ?? DEFAULT_PLAYBACK_SPEED
-  const activePlaybackTurn = playbackTurns[playbackTurnIndex]
-  const activePlaybackUnitId = useMemo(
-    () => getActivePlaybackUnitId(activePlaybackTurn, revealedUnitIds),
-    [activePlaybackTurn, revealedUnitIds],
-  )
-  const playbackStarted = playbackMode !== 'idle'
-  const playbackComplete =
-    playbackTurns.length > 0
-    && playbackTurnIndex >= playbackTurns.length - 1
-    && playbackTurns.every((turn) => turn.units.every((unit) => revealedUnitIds.has(unit.id)))
-  const playbackCanStepBackward = playbackTurns.length > 0 && Boolean(
-    playbackTurnIndex > 0 || activePlaybackTurn?.units.some((unit) => revealedUnitIds.has(unit.id)),
-  )
+  }, [layout, sessionId])
 
   useEffect(() => {
     if (!editingNoteTurnId || !session) {
@@ -167,37 +114,37 @@ function ReplayPanel({
     () => displayedTurns.map((turn) => getRequiredTurnLayout(layout, turn.id)),
     [displayedTurns, layout],
   )
-  const activeDisplayedTurnIndex = useMemo(() => {
-    const activeTurnId = playbackTurns[playbackTurnIndex]?.turnId
-    if (!activeTurnId) {
-      return -1
-    }
-
-    return displayedTurns.findIndex((turn) => turn.id === activeTurnId)
-  }, [displayedTurns, playbackTurnIndex, playbackTurns])
   const virtualizationEnabled = Boolean(session && displayedTurns.length >= VIRTUALIZATION_THRESHOLD)
   const virtualTranscript = useVirtualTranscript({
     turnLayouts: displayedTurnLayouts,
     visibleTurnIds: null,
-    activeTurnIndex: activeDisplayedTurnIndex,
+    activeTurnIndex: -1,
     enabled: virtualizationEnabled,
   })
+  const {
+    containerRef: virtualContainerRef,
+    invalidate: invalidateVirtualTranscript,
+    reportRowHeight,
+    rowHeights,
+    totalHeight,
+    visibleRange,
+  } = virtualTranscript
   const rowOffsets = useMemo(() => {
     const offsets: number[] = []
     let top = 0
 
-    for (const row of virtualTranscript.rowHeights) {
+    for (const row of rowHeights) {
       offsets.push(top)
       top += row.height
     }
 
     return offsets
-  }, [virtualTranscript.rowHeights])
+  }, [rowHeights])
 
   const setContentNode = useCallback((node: HTMLDivElement | null) => {
     contentRef.current = node
-    virtualTranscript.containerRef(node)
-  }, [virtualTranscript.containerRef])
+    virtualContainerRef(node)
+  }, [virtualContainerRef])
 
   const toggleBlock = useCallback((blockId: string) => {
     setExpandedBlockIds((current) => {
@@ -209,8 +156,8 @@ function ReplayPanel({
       }
       return next
     })
-    virtualTranscript.invalidate()
-  }, [virtualTranscript])
+    invalidateVirtualTranscript()
+  }, [invalidateVirtualTranscript])
 
   const openNoteEditor = useCallback((turn: PreviewTurn) => {
     setEditingNoteTurnId(turn.id)
@@ -232,81 +179,9 @@ function ReplayPanel({
     closeNoteEditor()
   }, [closeNoteEditor, editingNoteTurnId, noteDraft, onBookmarkChange])
 
-  const clearProgrammaticScrollTracking = useCallback(() => {
-    programmaticScrollRef.current = false
-    if (programmaticScrollTimeoutRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimeoutRef.current)
-      programmaticScrollTimeoutRef.current = null
-    }
-  }, [])
-
-  const resetPlayback = useCallback(() => {
-    clearProgrammaticScrollTracking()
-    setPlaybackAutoFollow(true)
-    setPlaybackTurnIndex(0)
-    setRevealedUnitIds(new Set())
-  }, [clearProgrammaticScrollTracking])
-
-  // Ignore scroll events caused by our own playback follow updates so only
-  // user-driven scrolling disables auto-follow.
-  const withProgrammaticScroll = useCallback((runScroll: () => void) => {
-    programmaticScrollRef.current = true
-    runScroll()
-
-    if (programmaticScrollTimeoutRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimeoutRef.current)
-    }
-
-    programmaticScrollTimeoutRef.current = window.setTimeout(() => {
-      clearProgrammaticScrollTracking()
-    }, 150)
-  }, [clearProgrammaticScrollTracking])
-
-  const stepPlaybackForward = useCallback(() => {
-    const nextState = getNextPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
-    if (!nextState) {
-      setPlaybackMode('paused')
-      return
-    }
-
-    setPlaybackTurnIndex(nextState.turnIndex)
-    setRevealedUnitIds(nextState.revealedUnitIds)
-  }, [playbackTurnIndex, playbackTurns, revealedUnitIds])
-
-  const stepPlaybackBackward = useCallback(() => {
-    const previousState = getPreviousPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
-    if (!previousState) {
-      resetPlayback()
-      return
-    }
-
-    setPlaybackTurnIndex(previousState.turnIndex)
-    setRevealedUnitIds(previousState.revealedUnitIds)
-  }, [playbackTurnIndex, playbackTurns, resetPlayback, revealedUnitIds])
-
-  useEffect(() => {
-    if (playbackMode !== 'playing') {
-      return
-    }
-
-    const delayMs = getNextPlaybackDelay(playbackTurns, playbackTurnIndex, revealedUnitIds, playbackSpeed)
-    if (delayMs === null) {
-      setPlaybackMode('paused')
-      return
-    }
-
-    const timer = window.setTimeout(() => {
-      stepPlaybackForward()
-    }, delayMs)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [playbackMode, playbackSpeed, playbackTurnIndex, playbackTurns, revealedUnitIds, stepPlaybackForward])
-
   useEffect(() => {
     const content = contentRef.current
-    if (!content || !session) {
+    if (!content || !sessionId) {
       return
     }
 
@@ -325,54 +200,10 @@ function ReplayPanel({
     return () => {
       window.cancelAnimationFrame(animationFrame)
     }
-  }, [session?.id])
-
-  useEffect(() => {
-    if (!playbackStarted || !playbackAutoFollow) {
-      return
-    }
-
-    const currentTurnId = playbackTurns[playbackTurnIndex]?.turnId
-    if (!currentTurnId) {
-      return
-    }
-
-    const activeOffset = activeDisplayedTurnIndex >= 0 ? rowOffsets[activeDisplayedTurnIndex] : null
-    const content = contentRef.current
-
-    const animationFrame = window.requestAnimationFrame(() => {
-      if (content && activeOffset !== null && typeof content.scrollTo === 'function') {
-        const nextTop = Math.max(0, activeOffset - Math.max(0, content.clientHeight - 160))
-        withProgrammaticScroll(() => {
-          content.scrollTo({
-            behavior: 'auto',
-            top: nextTop,
-          })
-        })
-      }
-    })
-
-    return () => {
-      window.cancelAnimationFrame(animationFrame)
-    }
-  }, [
-    activeDisplayedTurnIndex,
-    playbackAutoFollow,
-    playbackStarted,
-    playbackTurnIndex,
-    playbackTurns,
-    rowOffsets,
-    withProgrammaticScroll,
-  ])
-
-  useEffect(() => {
-    return () => {
-      clearProgrammaticScrollTracking()
-    }
-  }, [clearProgrammaticScrollTracking])
+  }, [sessionId])
 
   const renderedTurnRange = virtualizationEnabled
-    ? displayedTurns.slice(virtualTranscript.visibleRange.startIndex, virtualTranscript.visibleRange.endIndex + 1)
+    ? displayedTurns.slice(visibleRange.startIndex, visibleRange.endIndex + 1)
     : displayedTurns
 
   return (
@@ -380,22 +211,10 @@ function ReplayPanel({
       <div
         ref={setContentNode}
         className={`preview-block__content preview-block__content--chat${session ? '' : ' preview-block__content--idle'}`}
-        onScroll={() => {
-          if (!playbackStarted || !playbackAutoFollow) {
-            return
-          }
-
-          if (programmaticScrollRef.current) {
-            clearProgrammaticScrollTracking()
-            return
-          }
-
-          setPlaybackAutoFollow(false)
-        }}
       >
         <header className="preview-block__header">
           <div className="preview-block__title-group">
-            <h2>{session ? 'Session playback' : 'Preview ready'}</h2>
+            <h2>{session ? 'Session editor' : 'Preview ready'}</h2>
             {session ? <p className="preview-block__details">{formatTurnCount(totalCount)}</p> : null}
           </div>
           {session ? (
@@ -417,23 +236,14 @@ function ReplayPanel({
               </p>
             </div>
           ) : (
-            <ul
-              className={`preview-block__transcript${virtualizationEnabled ? ' preview-block__transcript--virtual' : ''}`}
-              style={virtualizationEnabled ? { height: virtualTranscript.totalHeight, position: 'relative' } : undefined}
-            >
-              {renderedTurnRange.map((turn, sliceIndex) => {
-                const rowIndex = virtualizationEnabled
-                  ? virtualTranscript.visibleRange.startIndex + sliceIndex
-                  : sliceIndex
-                const playback = getTurnPlaybackState({
-                  activePlaybackUnitId,
-                  playbackStarted,
-                  playbackTurnIndex,
-                  playbackTurnIndexById,
-                  playbackTurns,
-                  revealedUnitIds,
-                  turn,
-                })
+             <ul
+               className={`preview-block__transcript${virtualizationEnabled ? ' preview-block__transcript--virtual' : ''}`}
+               style={virtualizationEnabled ? { height: totalHeight, position: 'relative' } : undefined}
+             >
+               {renderedTurnRange.map((turn, sliceIndex) => {
+                 const rowIndex = virtualizationEnabled
+                   ? visibleRange.startIndex + sliceIndex
+                   : sliceIndex
 
                 return (
                   <ReplayTurnRow
@@ -443,7 +253,7 @@ function ReplayPanel({
                     expandedBlockIds={expandedBlockIds}
                     editingNoteTurnId={editingNoteTurnId}
                     noteDraft={noteDraft}
-                    playback={playback}
+                    mode="editor"
                     style={virtualizationEnabled ? {
                       left: 0,
                       position: 'absolute',
@@ -455,10 +265,10 @@ function ReplayPanel({
                     onBookmarkCancel={closeNoteEditor}
                     onOpenBookmark={openNoteEditor}
                     onToggleBlock={toggleBlock}
-                    onToggleTurnIncluded={onToggleTurnIncluded}
-                    onMeasure={virtualizationEnabled ? (height) => {
-                      virtualTranscript.reportRowHeight(rowIndex, height + ROW_GAP_PX)
-                    } : undefined}
+                     onToggleTurnIncluded={onToggleTurnIncluded}
+                     onMeasure={virtualizationEnabled ? (height) => {
+                       reportRowHeight(rowIndex, height + ROW_GAP_PX)
+                     } : undefined}
                     onTurnNode={(turnId, node) => {
                       turnRefs.current[turnId] = node
                     }}
@@ -470,82 +280,17 @@ function ReplayPanel({
         </div>
       </div>
       {session ? (
-        <div className="preview-block__dock" role="toolbar" aria-label="Playback controls">
-          <button
-            aria-label={playbackMode === 'playing' ? 'Pause playback' : 'Play transcript'}
-            className={`preview-block__action preview-block__action--icon ${playbackMode === 'playing' ? 'preview-block__action--active' : ''}`}
-            type="button"
-            onClick={() => {
-              if (playbackMode === 'playing') {
-                setPlaybackMode('paused')
-                return
-              }
-
-              if (playbackTurns.length === 0) {
-                return
-              }
-
-              if (playbackMode === 'idle' || playbackComplete) {
-                resetPlayback()
-              }
-
-              setPlaybackMode('playing')
-            }}
-          >
-            {playbackMode === 'playing' ? <Pause size={16} strokeWidth={1.8} /> : <Play size={16} strokeWidth={1.8} />}
-          </button>
-          <button
-            aria-label="Previous step"
-            className="preview-block__action preview-block__action--icon"
-            type="button"
-            disabled={!playbackCanStepBackward}
-            onClick={() => {
-              if (!playbackCanStepBackward) {
-                return
-              }
-
-              if (!playbackStarted) {
-                resetPlayback()
-                setPlaybackMode('paused')
-                return
-              }
-
-              setPlaybackMode('paused')
-              stepPlaybackBackward()
-            }}
-          >
-            <ChevronLeft size={16} strokeWidth={1.8} />
-          </button>
-          <button
-            aria-label="Next step"
-            className="preview-block__action preview-block__action--icon"
-            type="button"
-            disabled={playbackTurns.length === 0}
-            onClick={() => {
-              if (playbackTurns.length === 0) {
-                return
-              }
-
-              setPlaybackMode('paused')
-
-              if (!playbackStarted || playbackComplete) {
-                resetPlayback()
-                return
-              }
-
-              stepPlaybackForward()
-            }}
-          >
-            <ChevronRight size={16} strokeWidth={1.8} />
-          </button>
-          <button
-            aria-label={`Playback speed ${playbackSpeed}x`}
-            className="preview-block__action preview-block__action--speed"
-            type="button"
-            onClick={() => setPlaybackSpeedIndex((current) => (current + 1) % PLAYBACK_SPEEDS.length)}
-          >
-            {playbackSpeed}x
-          </button>
+        <div className="preview-block__dock" role="toolbar" aria-label="Editor controls">
+          {onStartPlayback ? (
+            <button
+              aria-label="Play transcript"
+              className="preview-block__action preview-block__action--icon"
+              type="button"
+              onClick={onStartPlayback}
+            >
+              <Play size={16} strokeWidth={1.8} />
+            </button>
+          ) : null}
           <button className="preview-block__action" type="button" onClick={onOpenPreview}>
             <Eye size={14} strokeWidth={1.8} />
             Preview
@@ -587,48 +332,6 @@ function getRequiredTurnLayout(
   }
 
   return turnLayout
-}
-
-function getTurnPlaybackState({
-  activePlaybackUnitId,
-  playbackStarted,
-  playbackTurnIndex,
-  playbackTurnIndexById,
-  playbackTurns,
-  revealedUnitIds,
-  turn,
-}: {
-  activePlaybackUnitId: string | null
-  playbackStarted: boolean
-  playbackTurnIndex: number
-  playbackTurnIndexById: ReadonlyMap<string, number>
-  playbackTurns: ReturnType<typeof createPlaybackTurnsFromLayout>
-  revealedUnitIds: ReadonlySet<string>
-  turn: PreviewTurn
-}): ReplayTurnPlaybackState | undefined {
-  const playbackIndex = playbackTurnIndexById.get(turn.id)
-  if (!playbackStarted || playbackIndex === undefined) {
-    return undefined
-  }
-
-  const playbackTurn = playbackTurns[playbackIndex]
-  const isPast = playbackIndex < playbackTurnIndex
-  const isActive = playbackIndex === playbackTurnIndex
-  const revealAll = isPast || (isActive && turn.role === 'user')
-  const visibleUnitIds = revealAll
-    ? new Set(playbackTurn?.units.map((unit) => unit.id) ?? [])
-    : isActive
-      ? revealedUnitIds
-      : new Set<string>()
-
-  return {
-    activeUnitId: isActive ? activePlaybackUnitId : null,
-    animate: isActive,
-    isActive,
-    isPast,
-    revealAll,
-    visibleUnitIds,
-  }
 }
 
 export { ReplayPanel }

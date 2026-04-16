@@ -9,6 +9,7 @@ import {
   filterBrowserSessionRows,
   getSourceLabel,
 } from './features/browser/model'
+import { PlaybackSurface } from './features/playback/PlaybackSurface'
 import { ReplayPanel } from './features/preview/ReplayPanel'
 import type { PreviewTurn, ReplaySession } from './features/preview/ReplayPanel'
 import { ExportPreviewDialog } from './features/export/ExportPreviewDialog'
@@ -159,6 +160,7 @@ function App() {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSettingsOpen, setExportSettingsOpen] = useState(false)
+  const [playbackActive, setPlaybackActive] = useState(false)
   const pollingRequestInFlight = useRef(false)
 
   const browserFilters = useBrowserPrefsStore((state) => state.filters)
@@ -404,6 +406,7 @@ function App() {
       setSelectedSessionId(sessionId)
       setExportError(null)
       setExportSettingsOpen(false)
+      setPlaybackActive(false)
       setLoadedSession(null)
       setPreviewOpen(false)
       setPreviewHtml('')
@@ -555,21 +558,30 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            <ReplayPanel
-              canExport={canExport}
-              isExporting={exporting}
-              layout={transcriptLayout}
-              onExport={() => {
-                void handleExport()
-              }}
-              session={replaySession}
-              visibleCount={visibleTurnCount}
-              totalCount={totalTurnCount}
-              onBookmarkChange={handleBookmarkChange}
-              onOpenExportSettings={() => setExportSettingsOpen(true)}
-              onOpenPreview={() => setPreviewOpen(true)}
-              onToggleTurnIncluded={toggleTurn}
-            />
+            {playbackActive && replaySession && transcriptLayout ? (
+              <PlaybackSurface
+                session={replaySession}
+                layout={transcriptLayout}
+                onExitPlayback={() => setPlaybackActive(false)}
+              />
+            ) : (
+              <ReplayPanel
+                canExport={canExport}
+                isExporting={exporting}
+                layout={transcriptLayout}
+                onExport={() => {
+                  void handleExport()
+                }}
+                session={replaySession}
+                visibleCount={visibleTurnCount}
+                totalCount={totalTurnCount}
+                onBookmarkChange={handleBookmarkChange}
+                onOpenExportSettings={() => setExportSettingsOpen(true)}
+                onOpenPreview={() => setPreviewOpen(true)}
+                onStartPlayback={replaySession ? () => setPlaybackActive(true) : undefined}
+                onToggleTurnIncluded={toggleTurn}
+              />
+            )}
           </main>
           <ExportPreviewDialog
             isOpen={previewOpen}

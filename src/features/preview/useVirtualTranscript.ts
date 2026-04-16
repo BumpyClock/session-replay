@@ -3,12 +3,13 @@
  *
  * Computes which turn rows are visible given a scroll container's
  * scrollTop + clientHeight, estimated row heights, and an overscan
- * count. Rows outside the visible window are unmounted.
+ * count. When virtualization is enabled, rows outside the visible
+ * window are unmounted.
  *
  * Height corrections: when a mounted row reports its actual DOM height
- * the hook stores the correction and adjusts total height. A balanced
- * anchor strategy keeps the active playback turn anchored during
- * corrections.
+ * the hook stores the correction and adjusts total height. Active-turn
+ * anchoring can keep playback aligned during corrections when
+ * preserveActiveTurnAnchor is enabled.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -195,6 +196,8 @@ export interface VirtualTranscriptOptions {
   visibleTurnIds: ReadonlySet<string> | null
   /** Index of the currently-active playback turn (for anchoring). -1 = none. */
   activeTurnIndex: number
+  /** Whether measurement corrections should keep the active turn anchored. */
+  preserveActiveTurnAnchor?: boolean
   /** Overscan row count in each direction. */
   overscan?: number
   /** Whether virtualization is enabled. */
@@ -220,6 +223,7 @@ export function useVirtualTranscript({
   turnLayouts,
   visibleTurnIds,
   activeTurnIndex,
+  preserveActiveTurnAnchor = true,
   overscan = DEFAULT_OVERSCAN,
   enabled,
 }: VirtualTranscriptOptions): VirtualTranscriptResult {
@@ -350,10 +354,11 @@ export function useVirtualTranscript({
       const next = [...prev]
       next[index] = { height, measured: true }
 
-      // Anchor correction: if the changed row is above the active turn,
-      // adjust scrollTop to keep the active turn in place.
-      if (activeTurnIndex >= 0 && index < activeTurnIndex && containerRef.current) {
-        const delta = computeAnchorCorrection(activeTurnIndex, prev, next)
+      // Keep the active row's bottom edge anchored when rows before it or the
+      // active row itself change height.
+      if (preserveActiveTurnAnchor && activeTurnIndex >= 0 && index <= activeTurnIndex && containerRef.current) {
+        const anchorBoundary = Math.min(activeTurnIndex + 1, next.length)
+        const delta = computeAnchorCorrection(anchorBoundary, prev, next)
         if (Math.abs(delta) > 1) {
           containerRef.current.scrollTop += delta
         }
@@ -361,7 +366,7 @@ export function useVirtualTranscript({
 
       return next
     })
-  }, [activeTurnIndex])
+  }, [activeTurnIndex, preserveActiveTurnAnchor])
 
   const invalidate = useCallback(() => {
     setRowHeights(estimatedHeights)

@@ -167,14 +167,15 @@ describe('ReplayPanel', () => {
     ).toBeInTheDocument()
     expect(screen.queryByText('0/0 visible')).not.toBeInTheDocument()
     expect(screen.queryByText('Replay preview')).not.toBeInTheDocument()
-    expect(screen.queryByRole('toolbar', { name: 'Playback controls' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 
-  it('renders markdown html inside session playback cards', () => {
+  it('renders editor surface with bookmark editing, turn visibility, and export controls', () => {
     const onBookmarkChange = vi.fn()
     const onExport = vi.fn()
     const onOpenExportSettings = vi.fn()
     const onOpenPreview = vi.fn()
+    const onStartPlayback = vi.fn()
     const onToggleTurnIncluded = vi.fn()
     const { container } = render(
       <ReplayPanel
@@ -187,10 +188,12 @@ describe('ReplayPanel', () => {
         onBookmarkChange={onBookmarkChange}
         onOpenExportSettings={onOpenExportSettings}
         onOpenPreview={onOpenPreview}
+        onStartPlayback={onStartPlayback}
         onToggleTurnIncluded={onToggleTurnIncluded}
       />,
     )
 
+    expect(screen.getByRole('heading', { level: 2, name: 'Session editor' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Heading' })).toBeInTheDocument()
     expect(screen.getByText('bullet')).toBeInTheDocument()
     expect(screen.getAllByText('Need review replay UX.').length).toBeGreaterThan(0)
@@ -203,17 +206,19 @@ describe('ReplayPanel', () => {
     expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()
     expect(screen.getByText('1 text, 1 thinking, 1 tool call')).toBeInTheDocument()
     expect(screen.getByText('07:04 AM')).toBeInTheDocument()
-    const toolbar = screen.getByRole('toolbar', { name: 'Playback controls' })
+    expect(screen.getByText('completed · src/App.tsx')).toBeInTheDocument()
+
+    // Editor toolbar has play, preview, export, and settings — no step/speed controls
+    const toolbar = screen.getByRole('toolbar', { name: 'Editor controls' })
     expect(within(toolbar).getByRole('button', { name: 'Play transcript' })).toBeInTheDocument()
-    expect(within(toolbar).getByRole('button', { name: 'Previous step' })).toBeDisabled()
-    expect(within(toolbar).getByRole('button', { name: 'Next step' })).toBeInTheDocument()
-    expect(within(toolbar).getByRole('button', { name: 'Playback speed 4x' })).toBeInTheDocument()
     expect(within(toolbar).getByRole('button', { name: 'Open export settings' })).toBeInTheDocument()
     expect(within(toolbar).getByRole('button', { name: 'Preview' })).toBeInTheDocument()
     expect(within(toolbar).getByRole('button', { name: 'Export' })).toBeInTheDocument()
+    expect(within(toolbar).queryByRole('button', { name: 'Previous step' })).not.toBeInTheDocument()
+    expect(within(toolbar).queryByRole('button', { name: 'Next step' })).not.toBeInTheDocument()
+    expect(within(toolbar).queryByRole('button', { name: /Playback speed/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Expand all' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Collapse all' })).not.toBeInTheDocument()
-    expect(screen.getByText('completed · src/App.tsx')).toBeInTheDocument()
 
     const details = container.querySelectorAll('details')
     expect(details[0]).not.toHaveAttribute('open')
@@ -229,6 +234,9 @@ describe('ReplayPanel', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Export' }))
     expect(onExport).toHaveBeenCalledTimes(1)
 
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Play transcript' }))
+    expect(onStartPlayback).toHaveBeenCalledTimes(1)
+
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit bookmark note' })[0])
     const noteInput = screen.getByLabelText('Bookmark note for turn-1')
     fireEvent.change(noteInput, { target: { value: 'Flag this answer' } })
@@ -239,97 +247,15 @@ describe('ReplayPanel', () => {
     expect(onToggleTurnIncluded).toHaveBeenCalledWith('turn-0')
   })
 
-  it('reveals assistant content progressively while playback runs', async () => {
-    vi.useFakeTimers()
-
-    try {
-      render(
-        <ReplayPanel
-          canExport
-          layout={sessionLayout}
-          onExport={vi.fn()}
-          session={session}
-          totalCount={3}
-          visibleCount={2}
-          onBookmarkChange={vi.fn()}
-          onOpenExportSettings={vi.fn()}
-          onOpenPreview={vi.fn()}
-          onToggleTurnIncluded={vi.fn()}
-        />,
-      )
-
-      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
-
-      expect(screen.getByRole('button', { name: 'Pause playback' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Previous step' })).toBeDisabled()
-      expect(screen.queryByRole('heading', { level: 2, name: 'Heading' })).not.toBeInTheDocument()
-      expect(screen.queryByText('completed · src/App.tsx')).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-
-      expect(screen.getByRole('button', { name: 'Previous step' })).toBeEnabled()
-      expect(screen.queryByRole('heading', { level: 2, name: 'Heading' })).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-
-      expect(screen.getByRole('heading', { level: 2, name: 'Heading' })).toBeInTheDocument()
-      expect(screen.queryByText('completed · src/App.tsx')).not.toBeInTheDocument()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('keeps future turn headers mounted during playback while their bodies stay unrevealed', () => {
-    const playbackScrollSession: ReplaySession = {
-      ...session,
-      turnCount: 4,
-      turns: [
-        session.turns[0],
-        session.turns[1],
-        {
-          blocks: [
-            {
-              id: 'turn-3-user',
-              text: 'Future question body',
-              type: 'text',
-            },
-          ],
-          id: 'turn-3',
-          role: 'user',
-          summary: 'Future follow-up question',
-          timeLabel: '07:06 AM',
-          timestamp: '2026-04-13T07:06:00.000Z',
-        },
-        {
-          blocks: [
-            {
-              id: 'turn-4-text',
-              text: 'Future answer body',
-              type: 'text',
-            },
-          ],
-          id: 'turn-4',
-          role: 'assistant',
-          summary: 'Future answer summary',
-          timeLabel: '07:07 AM',
-          timestamp: '2026-04-13T07:07:00.000Z',
-        },
-      ],
-      updatedAt: '2026-04-13T07:07:00.000Z',
-    }
-
+  it('shows all turns including hidden turns in editor mode', () => {
     const { container } = render(
       <ReplayPanel
         canExport
-        layout={prepareTranscriptLayout(playbackScrollSession.turns)}
+        layout={sessionLayout}
         onExport={vi.fn()}
-        session={playbackScrollSession}
-        totalCount={4}
-        visibleCount={4}
+        session={session}
+        totalCount={3}
+        visibleCount={2}
         onBookmarkChange={vi.fn()}
         onOpenExportSettings={vi.fn()}
         onOpenPreview={vi.fn()}
@@ -337,170 +263,8 @@ describe('ReplayPanel', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
-
-    expect(screen.getByText('Future follow-up question')).toBeInTheDocument()
-    expect(screen.getByText('Future answer summary')).toBeInTheDocument()
-    expect(screen.queryByText('Future question body')).not.toBeInTheDocument()
-    expect(screen.queryByText('Future answer body')).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.replay-turn__body--placeholder')).toHaveLength(3)
-  })
-
-  it('lets users scroll up during playback without snapping back to the active turn', async () => {
-    vi.useFakeTimers()
-
-    const animationFrames: FrameRequestCallback[] = []
-    const originalRequestAnimationFrame = window.requestAnimationFrame
-    const originalCancelAnimationFrame = window.cancelAnimationFrame
-
-    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
-      animationFrames.push(callback)
-      return animationFrames.length
-    }) as typeof window.requestAnimationFrame
-    window.cancelAnimationFrame = vi.fn()
-
-    try {
-      const { container } = render(
-        <ReplayPanel
-          canExport
-          layout={sessionLayout}
-          onExport={vi.fn()}
-          session={session}
-          totalCount={3}
-          visibleCount={2}
-          onBookmarkChange={vi.fn()}
-          onOpenExportSettings={vi.fn()}
-          onOpenPreview={vi.fn()}
-          onToggleTurnIncluded={vi.fn()}
-        />,
-      )
-
-      const content = container.querySelector('.preview-block__content--chat') as HTMLDivElement
-      const scrollTo = vi.fn()
-      Object.defineProperty(content, 'scrollTop', { configurable: true, value: 0, writable: true })
-      content.scrollTo = scrollTo
-      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 320 })
-      Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 960 })
-
-      const flushAnimationFrames = () => {
-        act(() => {
-          while (animationFrames.length > 0) {
-            const pending = animationFrames.splice(0)
-            pending.forEach((callback) => callback(0))
-          }
-        })
-      }
-
-      flushAnimationFrames()
-      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
-      flushAnimationFrames()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-      flushAnimationFrames()
-
-      const scrollCallCountBeforeManualScroll = scrollTo.mock.calls.length
-      content.scrollTop = 0
-      fireEvent.scroll(content)
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-      flushAnimationFrames()
-
-      expect(scrollTo).toHaveBeenCalledTimes(scrollCallCountBeforeManualScroll)
-      expect(screen.getByRole('button', { name: 'Pause playback' })).toBeInTheDocument()
-    } finally {
-      window.requestAnimationFrame = originalRequestAnimationFrame
-      window.cancelAnimationFrame = originalCancelAnimationFrame
-      vi.useRealTimers()
-    }
-  })
-
-  it('groups short sequential tool calls into one block and appends new calls during playback', async () => {
-    vi.useFakeTimers()
-
-    const toolRunSession: ReplaySession = {
-      ...session,
-      turns: [
-        session.turns[0],
-        {
-          ...session.turns[1],
-          blocks: [
-            {
-              id: 'tool-run-1',
-              type: 'tool',
-              name: 'Read',
-              input: { file_path: 'src/App.tsx' },
-              output: 'first result',
-              status: 'completed',
-            },
-            {
-              id: 'tool-run-2',
-              type: 'tool',
-              name: 'Bash',
-              input: { command: 'echo ok' },
-              output: 'second result',
-              status: 'completed',
-            },
-          ],
-          summary: '2 tool calls',
-        },
-      ],
-    }
-
-    try {
-      const toolRunLayout = prepareTranscriptLayout(toolRunSession.turns)
-      const { container } = render(
-        <ReplayPanel
-          canExport
-          layout={toolRunLayout}
-          onExport={vi.fn()}
-          session={toolRunSession}
-          totalCount={2}
-          visibleCount={2}
-          onBookmarkChange={vi.fn()}
-          onOpenExportSettings={vi.fn()}
-          onOpenPreview={vi.fn()}
-          onToggleTurnIncluded={vi.fn()}
-        />,
-      )
-
-      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
-      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('2 tool calls')
-
-      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
-
-      expect(screen.queryByText('Tool: Read')).not.toBeInTheDocument()
-      expect(screen.queryByText('Tool: Bash')).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-
-      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(0)
-      expect(screen.queryByText('Tool: Read')).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-
-      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
-      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('Tool: Read')
-      expect(container.querySelectorAll('.replay-disclosure--tool')).toHaveLength(1)
-      expect(screen.queryByText('Tool: Bash')).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
-      })
-
-      expect(container.querySelectorAll('.replay-tool-group')).toHaveLength(1)
-      expect(container.querySelector('.replay-tool-group__label')?.textContent).toBe('2 tool calls')
-      expect(container.querySelectorAll('.replay-disclosure--tool')).toHaveLength(2)
-      expect(screen.getByText('Tool: Bash')).toBeInTheDocument()
-    } finally {
-      vi.useRealTimers()
-    }
+    // Editor always displays all turns — including hidden ones
+    expect(container.querySelectorAll('.replay-turn')).toHaveLength(3)
+    expect(screen.getByText('Hidden from preview + export')).toBeInTheDocument()
   })
 })

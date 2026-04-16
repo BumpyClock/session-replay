@@ -118,7 +118,7 @@ describe('App flow', () => {
     await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(previewSessionMock).toHaveBeenCalled())
 
-    expect(screen.getByRole('heading', { name: 'Session playback' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Session editor' })).toBeInTheDocument()
     expect(screen.getByText('assistant message')).toBeInTheDocument()
     expect(screen.queryByTitle('Replay export preview')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Preview' }))
