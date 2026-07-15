@@ -1,6 +1,7 @@
 export {
   createEditorStore,
   editorStore,
+  type EditorStore,
   useEditorStore,
 } from './store'
 export {

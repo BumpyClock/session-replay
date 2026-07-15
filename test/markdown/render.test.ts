@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ReplayBlock, ReplayTurn } from '../../src/lib/api/contracts'
-import { renderReplayBlockHtml, renderReplayTurnBodyHtml } from '../../src/lib/markdown'
+import { renderMarkdownHtml, renderReplayBlockHtml, renderReplayTurnBodyHtml } from '../../src/lib/markdown'
 
 function createTurn(text: string): ReplayTurn {
   return {
@@ -18,6 +18,30 @@ function createTurn(text: string): ReplayTurn {
 }
 
 describe('renderReplayTurnBodyHtml', () => {
+  it('linkifies bare addresses with safe external-link attributes', () => {
+    const html = renderMarkdownHtml('Email person@example.com or visit https://example.com/docs')
+
+    expect(html).toContain('href="mailto:person@example.com"')
+    expect(html).toContain('href="https://example.com/docs"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noreferrer noopener"')
+  })
+
+  it('keeps repeated email linkification within a linear-time bound', () => {
+    renderMarkdownHtml('a@b.com\n'.repeat(100))
+
+    const measure = (repetitions: number) => {
+      const startedAt = performance.now()
+      renderMarkdownHtml('a@b.com\n'.repeat(repetitions))
+      return performance.now() - startedAt
+    }
+    const smallDuration = measure(2_000)
+    const largeDuration = measure(4_000)
+
+    expect(largeDuration).toBeLessThan(smallDuration * 3 + 100)
+    expect(largeDuration).toBeLessThan(1_500)
+  }, 5_000)
+
   it('renders heading, list, code, and link markdown into html', () => {
     const html = renderReplayTurnBodyHtml(
       createTurn(

@@ -6,6 +6,23 @@ import { BrowserPanel } from '../../src/features/browser/BrowserPanel'
 import { type BrowserFilterOption, type BrowserProjectGroup } from '../../src/features/browser/model'
 import { DEFAULT_FILTERS, type BrowserFilters } from '../../src/lib/browser/store'
 
+function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve
+  })
+
+  return {
+    promise,
+    resolve: () => {
+      if (!resolvePromise) {
+        throw new Error('Deferred promise was not initialized')
+      }
+      resolvePromise()
+    },
+  }
+}
+
 const projectGroups: BrowserProjectGroup[] = [
   {
     agentSources: ['claude-code', 'codex'],
@@ -207,13 +224,10 @@ describe('BrowserPanel', () => {
 
   it('keeps refresh busy long enough to show manual refresh feedback', async () => {
     const user = userEvent.setup()
-    let resolveRefresh: (() => void) | null = null
+    const refresh = createDeferredVoid()
 
     renderBrowserPanel({
-      onRefresh: () =>
-        new Promise<void>((resolve) => {
-          resolveRefresh = resolve
-        }),
+      onRefresh: () => refresh.promise,
     })
 
     const refreshButton = screen.getByRole('button', { name: /refresh sessions/i })
@@ -221,7 +235,7 @@ describe('BrowserPanel', () => {
     await user.click(refreshButton)
     expect(refreshButton).toHaveAttribute('aria-busy', 'true')
 
-    resolveRefresh?.()
+    refresh.resolve()
     await waitFor(() => {
       expect(refreshButton).toHaveAttribute('aria-busy', 'false')
     })

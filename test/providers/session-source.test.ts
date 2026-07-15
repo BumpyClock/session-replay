@@ -283,7 +283,10 @@ describe('createSessionSource', () => {
     expect(result.turns).toHaveLength(2)
     expect(result.turns[0]?.role).toBe('user')
     expect(result.turns[1]?.role).toBe('assistant')
-    expect(result.turns[1]?.blocks[0]?.text).toBe('Hi there')
+    expect(result.turns[1]?.blocks[0]).toMatchObject({
+      text: 'Hi there',
+      type: 'markdown',
+    })
   })
 
   it('loads codex sessions by session id and normalizes tool calls', async () => {

@@ -290,8 +290,16 @@ function parseLegacyCodexTurns(context: Readonly<CodexParseContext>): Normalized
 
 function parseModernCodexTurns(context: Readonly<CodexParseContext>): NormalizedTurn[] {
   const turns: NormalizedTurn[] = []
-  const turn = createCodexTurn(context.file, turns.length, context.entries[0]?.value?.timestamp ?? null)
-  turns.push(turn)
+  let currentTurn: NormalizedTurn | null = null
+
+  const appendToCurrentTurn = (entry: JsonLineEntry<CodexEntry>): NormalizedTurn => {
+    if (!currentTurn) {
+      currentTurn = createCodexTurn(context.file, turns.length, entry.value?.timestamp ?? null)
+      turns.push(currentTurn)
+    }
+    appendTurnLine(currentTurn, entry.line)
+    return currentTurn
+  }
 
   for (const entry of context.entries) {
     if (entry.value?.type === 'session_meta') {
@@ -313,7 +321,6 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
       continue
     }
 
-    appendTurnLine(turn, entry.line)
     const itemType = typeof item.type === 'string' ? item.type : ''
 
     if (itemType === 'message' && item.role === 'user') {
@@ -330,11 +337,20 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
         })
         .filter(Boolean)
         .join('\n\n')
-      turn.userText = extractCodexUserText(text)
+      const userText = extractCodexUserText(text)
+      if (!userText) {
+        continue
+      }
+      if (currentTurn && hasTurnContent(currentTurn)) {
+        currentTurn = null
+      }
+      const turn = appendToCurrentTurn(entry)
+      turn.userText = userText
       continue
     }
 
     if (itemType === 'message' && item.role === 'developer') {
+      const turn = appendToCurrentTurn(entry)
       const content = Array.isArray(item.content) ? item.content : []
       const text = content
         .map((part) => {
@@ -366,6 +382,7 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if (itemType === 'reasoning' && typeof item.text === 'string') {
+      const turn = appendToCurrentTurn(entry)
       const block = createTextBlock({
         filePath: context.file.path,
         id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
@@ -383,6 +400,7 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if ((itemType === 'agent_message' || itemType === 'message') && typeof item.text === 'string') {
+      const turn = appendToCurrentTurn(entry)
       const block = createTextBlock({
         filePath: context.file.path,
         id: `${turn.id}:assistant:${turn.assistantBlocks.length}`,
@@ -400,6 +418,7 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if (itemType === 'command_execution') {
+      const turn = appendToCurrentTurn(entry)
       turn.assistantBlocks.push(
         createToolCall({
           filePath: context.file.path,
@@ -419,6 +438,7 @@ function parseModernCodexTurns(context: Readonly<CodexParseContext>): Normalized
     }
 
     if (itemType === 'function_call') {
+      const turn = appendToCurrentTurn(entry)
       turn.assistantBlocks.push(
         createToolCall({
           filePath: context.file.path,

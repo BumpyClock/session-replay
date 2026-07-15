@@ -1,6 +1,6 @@
 import { useStore } from 'zustand'
 import { createJSONStorage, persist, type PersistOptions, type StateStorage } from 'zustand/middleware'
-import { createStore, type StoreApi } from 'zustand/vanilla'
+import { createStore, type Mutate, type StoreApi } from 'zustand/vanilla'
 import {
   getSessionDraft,
   resolveSessionDraft,
@@ -48,9 +48,14 @@ export interface CreateEditorStoreOptions {
   storage?: EditorStorePersist['storage']
 }
 
+export type EditorStore = Mutate<
+  StoreApi<EditorStoreState>,
+  [['zustand/persist', PersistedEditorStoreState]]
+>
+
 export function createEditorStore(
   options: CreateEditorStoreOptions = {},
-): StoreApi<EditorStoreState> {
+): EditorStore {
   return createStore<EditorStoreState>()(
     persist(createEditorStoreState(), {
       name: options.persistKey ?? DEFAULT_PERSIST_KEY,

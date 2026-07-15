@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import { useEffect } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { PlaybackSurface } from '../../src/features/playback/PlaybackSurface'
@@ -8,6 +8,7 @@ import {
   type PlaybackViewportState,
   type UsePlaybackViewportResult,
 } from '../../src/features/playback/usePlaybackViewport'
+import { PLAYBACK_VIEWPORT_MANIFEST } from '../../src/lib/replay/playback-viewport'
 import type { ReplaySession } from '../../src/features/preview/ReplayPanel'
 import { prepareTranscriptLayout } from '../../src/lib/replay/transcript-layout'
 
@@ -15,6 +16,18 @@ import { prepareTranscriptLayout } from '../../src/lib/replay/transcript-layout'
 // deriveViewportState — pure state derivation
 // ---------------------------------------------------------------------------
 describe('deriveViewportState', () => {
+  it('shares the exact viewport state and timing policy with export', () => {
+    expect(PLAYBACK_VIEWPORT_MANIFEST).toEqual({
+      states: {
+        underflow: 'underflow-bottom-anchored',
+        overflow: 'overflow-scrollable',
+        detached: 'user-detached',
+      },
+      programmaticScrollGuardMs: 150,
+      userScrollIntentWindowMs: 500,
+    })
+  })
+
   it('returns underflow-bottom-anchored when no overflow and not detached', () => {
     expect(deriveViewportState(false, false)).toBe('underflow-bottom-anchored')
   })

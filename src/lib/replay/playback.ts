@@ -28,6 +28,103 @@ export type ReplayPlaybackTurnPlan = {
   units: ReplayPlaybackUnit[]
 }
 
+export interface PlaybackFrame {
+  turnIndex: number
+  revealedUnitCount: number
+  activeUnitId: string | null
+  delayBySpeed: Readonly<Record<string, number | null>>
+}
+
+export interface PlaybackTimeline {
+  frames: readonly PlaybackFrame[]
+  initialFrameIndexByTurn: readonly number[]
+}
+
+/** Builds one compact frame per reachable turn/unit cursor position. */
+export function createPlaybackTimeline(
+  turns: readonly ReplayPlaybackTurnPlan[],
+  speeds: readonly number[] = PLAYBACK_SPEEDS,
+): PlaybackTimeline {
+  const frames: PlaybackFrame[] = []
+  const initialFrameIndexByTurn: number[] = []
+
+  for (let turnIndex = 0; turnIndex < turns.length; turnIndex += 1) {
+    const turn = turns[turnIndex]
+    if (!turn) continue
+    initialFrameIndexByTurn.push(frames.length)
+
+    for (let revealedUnitCount = 0; revealedUnitCount <= turn.units.length; revealedUnitCount += 1) {
+      const nextUnit = turn.units[revealedUnitCount]
+      const hasNextTurn = turnIndex < turns.length - 1
+      const delayBySpeed = Object.fromEntries(speeds.map((speed) => [
+        String(speed),
+        nextUnit
+          ? Math.max(PLAYBACK_MIN_UNIT_DELAY_MS, Math.round(nextUnit.delayMs / speed))
+          : hasNextTurn
+            ? Math.max(120, Math.round(PLAYBACK_TURN_DWELL_MS / speed))
+            : null,
+      ]))
+
+      frames.push({
+        turnIndex,
+        revealedUnitCount,
+        activeUnitId: revealedUnitCount > 0 ? (turn.units[revealedUnitCount - 1]?.id ?? null) : null,
+        delayBySpeed,
+      })
+    }
+  }
+
+  return { frames, initialFrameIndexByTurn }
+}
+
+export function getInitialPlaybackFrameIndex(
+  timeline: PlaybackTimeline,
+  initialTurnIndex: number,
+): number {
+  if (timeline.frames.length === 0) return 0
+  const clampedTurnIndex = Math.min(Math.max(initialTurnIndex, 0), timeline.initialFrameIndexByTurn.length - 1)
+  return timeline.initialFrameIndexByTurn[clampedTurnIndex] ?? 0
+}
+
+export function getPlaybackFrame(
+  timeline: PlaybackTimeline,
+  frameIndex: number,
+): PlaybackFrame | undefined {
+  return timeline.frames[frameIndex]
+}
+
+export function getNextPlaybackFrameIndex(timeline: PlaybackTimeline, frameIndex: number): number | null {
+  return frameIndex < timeline.frames.length - 1 ? frameIndex + 1 : null
+}
+
+export function getPreviousPlaybackFrameIndex(frameIndex: number): number | null {
+  return frameIndex > 0 ? frameIndex - 1 : null
+}
+
+export function isPlaybackTimelineComplete(timeline: PlaybackTimeline, frameIndex: number): boolean {
+  return timeline.frames.length > 0 && frameIndex >= timeline.frames.length - 1
+}
+
+export function getVisiblePlaybackUnitIds(
+  turns: readonly ReplayPlaybackTurnPlan[],
+  frame: PlaybackFrame | undefined,
+): Set<string> {
+  const visibleUnitIds = new Set<string>()
+  if (!frame) return visibleUnitIds
+
+  for (let turnIndex = 0; turnIndex <= frame.turnIndex; turnIndex += 1) {
+    const turn = turns[turnIndex]
+    if (!turn) continue
+    const visibleCount = turnIndex < frame.turnIndex ? turn.units.length : frame.revealedUnitCount
+    for (let unitIndex = 0; unitIndex < visibleCount; unitIndex += 1) {
+      const unitId = turn.units[unitIndex]?.id
+      if (unitId) visibleUnitIds.add(unitId)
+    }
+  }
+
+  return visibleUnitIds
+}
+
 /**
  * Creates replay pacing units shared by the playback surface and exported viewer.
  */
@@ -75,114 +172,6 @@ export function estimateReplayBlockDelay(block: ReplayRenderableBlock): number {
   }
 
   return clampDelay(block.text.length * 10)
-}
-
-/** Returns next timer delay, or `null` when playback should stop scheduling. */
-export function getNextPlaybackDelay(
-  turns: readonly ReplayPlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-  playbackSpeed: number,
-): number | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
-  if (nextUnit) {
-    return Math.max(PLAYBACK_MIN_UNIT_DELAY_MS, Math.round(nextUnit.delayMs / playbackSpeed))
-  }
-
-  if (turnIndex < turns.length - 1) {
-    return Math.max(120, Math.round(PLAYBACK_TURN_DWELL_MS / playbackSpeed))
-  }
-
-  return null
-}
-
-/** Reveals the next unit of the current turn or advances to the next turn; `null` means playback is complete. */
-export function getNextPlaybackState(
-  turns: readonly ReplayPlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-): { revealedUnitIds: Set<string>; turnIndex: number } | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  const nextUnit = currentTurn.units.find((unit) => !visibleUnitIds.has(unit.id))
-  if (nextUnit) {
-    const nextVisibleUnitIds = new Set(visibleUnitIds)
-    nextVisibleUnitIds.add(nextUnit.id)
-    return {
-      revealedUnitIds: nextVisibleUnitIds,
-      turnIndex,
-    }
-  }
-
-  // Advance to the next turn; its units are revealed on subsequent ticks.
-  if (turnIndex < turns.length - 1) {
-    return {
-      revealedUnitIds: new Set(visibleUnitIds),
-      turnIndex: turnIndex + 1,
-    }
-  }
-
-  return null
-}
-
-/** Hides the most recent unit first, then moves back one turn; `null` means already at start. */
-export function getPreviousPlaybackState(
-  turns: readonly ReplayPlaybackTurnPlan[],
-  turnIndex: number,
-  visibleUnitIds: ReadonlySet<string>,
-): { revealedUnitIds: Set<string>; turnIndex: number } | null {
-  const currentTurn = turns[turnIndex]
-  if (!currentTurn) {
-    return null
-  }
-
-  for (let index = currentTurn.units.length - 1; index >= 0; index -= 1) {
-    const unit = currentTurn.units[index]
-    if (unit && visibleUnitIds.has(unit.id)) {
-      const nextVisibleUnitIds = new Set(visibleUnitIds)
-      nextVisibleUnitIds.delete(unit.id)
-      return {
-        revealedUnitIds: nextVisibleUnitIds,
-        turnIndex,
-      }
-    }
-  }
-
-  if (turnIndex > 0) {
-    return {
-      revealedUnitIds: new Set(visibleUnitIds),
-      turnIndex: turnIndex - 1,
-    }
-  }
-
-  return null
-}
-
-/** Returns most recently revealed unit in active turn, not the next queued unit. */
-export function getActivePlaybackUnitId(
-  turn: ReplayPlaybackTurnPlan | undefined,
-  visibleUnitIds: ReadonlySet<string>,
-): string | null {
-  if (!turn) {
-    return null
-  }
-
-  for (let index = turn.units.length - 1; index >= 0; index -= 1) {
-    const candidate = turn.units[index]
-    if (candidate && visibleUnitIds.has(candidate.id)) {
-      return candidate.id
-    }
-  }
-
-  return null
 }
 
 function clampDelay(value: number): number {

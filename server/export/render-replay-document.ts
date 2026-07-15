@@ -10,21 +10,22 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   MaterializedReplaySession,
+  ReplayBlock,
   ReplayRenderOptions,
+  ReplayTurn,
 } from '../../src/lib/api/contracts'
 import { ReplayTurnRow } from '../../src/features/preview/ReplayTurnRow'
 import { buildReplaySession } from '../../src/features/preview/replay-model'
 import {
   DEFAULT_PLAYBACK_SPEED,
-  PLAYBACK_TURN_DWELL_MS,
-  PLAYBACK_SPEEDS,
 } from '../../src/lib/replay/playback'
 import {
   createPlaybackTurnsFromLayout,
   prepareTranscriptLayout,
 } from '../../src/lib/replay/transcript-layout'
 import type { PreparedTurnLayout } from '../../src/lib/replay/transcript-layout-types'
-import { buildExportPayload, estimateTurnHeight } from './export-payload'
+import { buildExportPayload } from './export-payload'
+import { buildPlaybackRuntime } from './playback-runtime'
 
 const PLAY_ICON = renderIconMarkup(Play, 16)
 const PAUSE_ICON = renderIconMarkup(Pause, 16)
@@ -56,7 +57,6 @@ export function renderReplayDocument(
   const playbackTurns = createPlaybackTurnsFromLayout(replay.turns, layout)
 
   const turnHtmlById = new Map<string, string>()
-  const turnHeightById = new Map<string, number>()
 
   for (const turn of replaySession.turns) {
     const turnLayout = getRequiredTurnLayout(layout.turnLayoutById, turn.id)
@@ -72,16 +72,9 @@ export function renderReplayDocument(
         }),
       ),
     )
-    turnHeightById.set(turn.id, estimateTurnHeight(turnLayout, turn.bookmarkLabel, options))
   }
 
-  const payload = buildExportPayload(
-    replay.turns,
-    turnHtmlById,
-    turnHeightById,
-    playbackTurns,
-    initialTurnIndex,
-  )
+  const payload = buildExportPayload(playbackTurns, initialTurnIndex)
 
   // Escape closing script tags in JSON to prevent premature tag termination.
   const payloadJson = JSON.stringify(payload).replace(/<\//g, '<\\/')
@@ -168,10 +161,9 @@ export function renderReplayDocument(
       </main>
     </div>
     <script type="application/json" id="replay-payload">${payloadJson}</script>
-    <script>${buildRuntime({
+    <script>${buildPlaybackRuntime({
       pauseIcon: PAUSE_ICON,
       playIcon: PLAY_ICON,
-      speeds: [...PLAYBACK_SPEEDS],
     })}</script>
   </body>
 </html>`
@@ -204,8 +196,8 @@ function createRenderableSession(
   // Export indices are rebuilt after filtering so bookmarks, initial turn selection,
   // and playback all target the surviving visible turn order.
   const visibleTurnIndexMap = new Map<number, number>()
-  const turns = includedTurns.flatMap((turn, originalVisibleIndex) => {
-    const blocks = turn.blocks.flatMap((block) => {
+  const turns = includedTurns.flatMap<ReplayTurn>((turn, originalVisibleIndex) => {
+    const blocks = turn.blocks.flatMap<ReplayBlock>((block) => {
       if (block.type === 'tool') {
         return includeToolCalls ? [block] : []
       }
@@ -1318,392 +1310,4 @@ code {
     text-align: left;
   }
 }`
-}
-
-function buildRuntime({
-  pauseIcon,
-  playIcon,
-  speeds,
-}: {
-  pauseIcon: string
-  playIcon: string
-  speeds: readonly number[]
-}): string {
-  const defaultSpeedIndex = Math.max(speeds.indexOf(DEFAULT_PLAYBACK_SPEED), 0)
-
-  // Export runtime stays self-contained. It reads the serialized payload from
-  // a JSON script tag and drives playback against the server-rendered
-  // transcript so long rows keep their natural document flow.
-  return `(function () {
-  var payloadEl = document.getElementById('replay-payload');
-  if (!payloadEl) { return; }
-  var payload = JSON.parse(payloadEl.textContent || '{}');
-  var turns = payload.turns || [];
-  var playbackTurns = payload.playbackTurns || [];
-  var initialTurnIndex = payload.initialTurnIndex || 0;
-  var playIcon = ${JSON.stringify(playIcon)};
-  var pauseIcon = ${JSON.stringify(pauseIcon)};
-  var speeds = ${JSON.stringify(speeds)};
-  var defaultSpeedIndex = ${defaultSpeedIndex};
-  var content = document.querySelector('[data-playback-content]');
-  var stage = document.querySelector('[data-playback-stage]');
-  var transcript = document.querySelector('[data-playback-transcript]');
-  var playButton = document.querySelector('[data-action="toggle-play"]');
-  var previousButton = document.querySelector('[data-action="prev"]');
-  var nextButton = document.querySelector('[data-action="next"]');
-  var speedButton = document.querySelector('[data-action="speed"]');
-  var mode = playbackTurns.length === 0 ? 'idle' : 'paused';
-  var speedIndex = defaultSpeedIndex;
-  var turnIndex = playbackTurns.length === 0
-    ? 0
-    : Math.min(Math.max(initialTurnIndex, 0), playbackTurns.length - 1);
-  var timer = null;
-  var initialScrollDone = false;
-  var hasOverflow = false;
-  var userDetached = false;
-  var programmaticScrollActive = false;
-  var programmaticScrollTimer = null;
-  var userScrollIntent = false;
-  var userScrollIntentTimer = null;
-  var visibleUnitIds = new Set();
-  var turnNodes = transcript ? Array.from(transcript.querySelectorAll('.replay-turn')) : [];
-  var turnIndexById = {};
-  var PROGRAMMATIC_SCROLL_GUARD_MS = 150;
-  var USER_SCROLL_INTENT_WINDOW_MS = 500;
-  for (var i = 0; i < playbackTurns.length; i++) {
-    turnIndexById[playbackTurns[i].turnId] = i;
-  }
-
-  function clearTimer() {
-    if (timer !== null) { window.clearTimeout(timer); timer = null; }
-  }
-
-  function clearProgrammaticScrollTracking() {
-    programmaticScrollActive = false;
-    if (programmaticScrollTimer !== null) {
-      window.clearTimeout(programmaticScrollTimer);
-      programmaticScrollTimer = null;
-    }
-  }
-
-  function clearUserScrollIntent() {
-    userScrollIntent = false;
-    if (userScrollIntentTimer !== null) {
-      window.clearTimeout(userScrollIntentTimer);
-      userScrollIntentTimer = null;
-    }
-  }
-
-  function resetViewport() {
-    clearProgrammaticScrollTracking();
-    clearUserScrollIntent();
-    hasOverflow = false;
-    userDetached = false;
-  }
-
-  function checkOverflow() {
-    if (!content) {
-      hasOverflow = false;
-      return;
-    }
-    hasOverflow = content.scrollHeight > content.clientHeight;
-  }
-
-  function deriveViewportState() {
-    if (userDetached) { return 'user-detached'; }
-    if (hasOverflow) { return 'overflow-scrollable'; }
-    return 'underflow-bottom-anchored';
-  }
-
-  function syncViewportState() {
-    checkOverflow();
-    if (stage) {
-      stage.setAttribute('data-viewport-state', deriveViewportState());
-    }
-  }
-
-  function markUserScrollIntent() {
-    userScrollIntent = true;
-    if (userScrollIntentTimer !== null) {
-      window.clearTimeout(userScrollIntentTimer);
-    }
-    userScrollIntentTimer = window.setTimeout(function () {
-      clearUserScrollIntent();
-    }, USER_SCROLL_INTENT_WINDOW_MS);
-  }
-
-  function onContentScroll() {
-    checkOverflow();
-    if (!hasOverflow || userDetached || programmaticScrollActive || !userScrollIntent) {
-      return;
-    }
-    clearUserScrollIntent();
-    userDetached = true;
-    sync();
-  }
-
-  function withProgrammaticScroll(scroll) {
-    programmaticScrollActive = true;
-    scroll();
-    if (programmaticScrollTimer !== null) {
-      window.clearTimeout(programmaticScrollTimer);
-    }
-    programmaticScrollTimer = window.setTimeout(function () {
-      clearProgrammaticScrollTracking();
-    }, PROGRAMMATIC_SCROLL_GUARD_MS);
-  }
-
-  function resetPlayback() {
-    resetViewport();
-    turnIndex = 0;
-    visibleUnitIds = new Set();
-  }
-
-  function playbackComplete() {
-    return playbackTurns.length > 0
-      && turnIndex >= playbackTurns.length - 1
-      && playbackTurns.every(function (t) { return t.units.every(function (u) { return visibleUnitIds.has(u.id); }); });
-  }
-
-  function playbackCanStepBackward() {
-    var activeTurn = playbackTurns[turnIndex];
-    return playbackTurns.length > 0 && Boolean(
-      turnIndex > 0 || (activeTurn && activeTurn.units.some(function (u) { return visibleUnitIds.has(u.id); }))
-    );
-  }
-
-  function getActivePlaybackUnitId(turn) {
-    if (!turn) { return null; }
-    for (var idx = turn.units.length - 1; idx >= 0; idx--) {
-      if (turn.units[idx] && visibleUnitIds.has(turn.units[idx].id)) {
-        return turn.units[idx].id;
-      }
-    }
-    return null;
-  }
-
-  function getNextPlaybackDelay() {
-    var currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) { return null; }
-    var nextUnit = currentTurn.units.find(function (u) { return !visibleUnitIds.has(u.id); });
-    if (nextUnit) {
-      return Math.max(60, Math.round(nextUnit.delayMs / (speeds[speedIndex] || 1)));
-    }
-    if (turnIndex < playbackTurns.length - 1) {
-      return Math.max(120, Math.round(${PLAYBACK_TURN_DWELL_MS} / (speeds[speedIndex] || 1)));
-    }
-    return null;
-  }
-
-  function getNextPlaybackState() {
-    var currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) { return null; }
-    var nextUnit = currentTurn.units.find(function (u) { return !visibleUnitIds.has(u.id); });
-    if (nextUnit) {
-      var next = new Set(visibleUnitIds);
-      next.add(nextUnit.id);
-      return { revealedUnitIds: next, turnIndex: turnIndex };
-    }
-    if (turnIndex < playbackTurns.length - 1) {
-      return { revealedUnitIds: new Set(visibleUnitIds), turnIndex: turnIndex + 1 };
-    }
-    return null;
-  }
-
-  function getPreviousPlaybackState() {
-    var currentTurn = playbackTurns[turnIndex];
-    if (!currentTurn) { return null; }
-    for (var idx = currentTurn.units.length - 1; idx >= 0; idx--) {
-      var unit = currentTurn.units[idx];
-      if (unit && visibleUnitIds.has(unit.id)) {
-        var prev = new Set(visibleUnitIds);
-        prev.delete(unit.id);
-        return { revealedUnitIds: prev, turnIndex: turnIndex };
-      }
-    }
-    if (turnIndex > 0) {
-      return { revealedUnitIds: new Set(visibleUnitIds), turnIndex: turnIndex - 1 };
-    }
-    return null;
-  }
-
-  function shouldDisplayTurn(idx) {
-    return mode === 'idle' || idx <= turnIndex;
-  }
-
-  function getEffectiveTurnCount() {
-    if (mode === 'idle') { return turns.length; }
-    return Math.min(turnIndex + 1, turns.length);
-  }
-
-  function findTurnNode(targetIndex) {
-    for (var idx = 0; idx < turnNodes.length; idx++) {
-      if (Number(turnNodes[idx].dataset.turnIndex || '-1') === targetIndex) {
-        return turnNodes[idx];
-      }
-    }
-    return null;
-  }
-
-  function syncTurnUnits(node, playbackIndex) {
-    var playbackStarted = mode !== 'idle';
-    var playbackTurn = playbackIndex !== undefined ? playbackTurns[playbackIndex] : undefined;
-    var isPlaybackPast = playbackStarted && playbackIndex !== undefined && playbackIndex < turnIndex;
-    var isPlaybackActive = playbackStarted && playbackIndex === turnIndex;
-    var revealAll = !playbackStarted || !playbackTurn || isPlaybackPast || (isPlaybackActive && playbackTurn.role === 'user');
-    var turnVisibleUnitIds = revealAll
-      ? new Set((playbackTurn ? playbackTurn.units : []).map(function (u) { return u.id; }))
-      : isPlaybackActive
-        ? new Set(visibleUnitIds)
-        : new Set();
-    var activeUnitId = getActivePlaybackUnitId(playbackTurns[turnIndex]);
-
-    node.querySelectorAll('.replay-playback-unit').forEach(function (unitNode) {
-      var unitId = unitNode.dataset.replayUnitId || '';
-      var isVisible = revealAll || turnVisibleUnitIds.has(unitId);
-      unitNode.hidden = !isVisible;
-      unitNode.classList.toggle('is-active', Boolean(isPlaybackActive && activeUnitId === unitId));
-      unitNode.classList.toggle('is-revealed', Boolean(isPlaybackActive && turnVisibleUnitIds.has(unitId)));
-    });
-
-    node.querySelectorAll('[data-replay-group-ids]').forEach(function (groupNode) {
-      var ids = (groupNode.dataset.replayGroupIds || '').split(',').filter(Boolean);
-      var shouldHide = !revealAll && ids.every(function (id) { return !turnVisibleUnitIds.has(id); });
-      groupNode.hidden = shouldHide;
-    });
-  }
-
-  function sync() {
-    var playbackStarted = mode !== 'idle';
-    var activeTurnId = playbackTurns[turnIndex] ? playbackTurns[turnIndex].turnId : null;
-    turnNodes.forEach(function (node) {
-      var pbIdx = turnIndexById[node.dataset.turnId || ''];
-      node.hidden = pbIdx !== undefined ? !shouldDisplayTurn(pbIdx) : mode !== 'idle';
-      var isPast = playbackStarted && pbIdx !== undefined && pbIdx < turnIndex;
-      var isActive = playbackStarted && pbIdx === turnIndex;
-      node.classList.toggle('is-playback-past', isPast);
-      node.classList.toggle('is-playback-active', isActive);
-      syncTurnUnits(node, pbIdx);
-    });
-
-    if (playButton) {
-      var isPlaying = mode === 'playing';
-      playButton.innerHTML = isPlaying ? pauseIcon : playIcon;
-      playButton.setAttribute('aria-label', isPlaying ? 'Pause playback' : 'Play transcript');
-      playButton.classList.toggle('preview-block__action--active', isPlaying);
-      playButton.disabled = playbackTurns.length === 0;
-    }
-    if (previousButton) { previousButton.disabled = !playbackCanStepBackward(); }
-    if (nextButton) { nextButton.disabled = playbackTurns.length === 0; }
-    if (speedButton) {
-      var speed = speeds[speedIndex] || 1;
-      speedButton.textContent = speed + 'x';
-      speedButton.setAttribute('aria-label', 'Playback speed ' + speed + 'x');
-    }
-
-    window.requestAnimationFrame(function () {
-      if (!content) { return; }
-      syncViewportState();
-
-      if (!initialScrollDone) {
-        var initNode = findTurnNode(Math.min(initialTurnIndex, Math.max(0, turns.length - 1)));
-        if (initNode && deriveViewportState() !== 'underflow-bottom-anchored') {
-          var initBottom = initNode.offsetTop + initNode.offsetHeight;
-          withProgrammaticScroll(function () {
-            content.scrollTo({ behavior: 'auto', top: Math.max(0, initBottom - Math.max(0, content.clientHeight - 160)) });
-          });
-        }
-        initialScrollDone = true;
-        return;
-      }
-
-      if (!playbackStarted || deriveViewportState() === 'underflow-bottom-anchored' || userDetached) { return; }
-
-      var activeIndex = activeTurnId !== null ? turnIndexById[activeTurnId] : undefined;
-      if (activeIndex !== undefined) {
-        var activeNode = findTurnNode(activeIndex);
-        if (!activeNode) { return; }
-        var activeBottom = activeNode.offsetTop + activeNode.offsetHeight;
-        withProgrammaticScroll(function () {
-          content.scrollTo({
-            behavior: 'auto',
-            top: Math.max(0, activeBottom - Math.max(0, content.clientHeight - 160)),
-          });
-        });
-      }
-    });
-  }
-
-  function schedulePlayback() {
-    clearTimer();
-    if (mode !== 'playing') { return; }
-    var delayMs = getNextPlaybackDelay();
-    if (delayMs === null) { mode = 'paused'; sync(); return; }
-    timer = window.setTimeout(function () {
-      var nextState = getNextPlaybackState();
-      if (!nextState) { mode = 'paused'; sync(); return; }
-      turnIndex = nextState.turnIndex;
-      visibleUnitIds = nextState.revealedUnitIds;
-      sync();
-      schedulePlayback();
-    }, delayMs);
-  }
-
-  if (playButton) {
-    playButton.addEventListener('click', function () {
-      if (mode === 'playing') { clearTimer(); mode = 'paused'; sync(); return; }
-      if (playbackTurns.length === 0) { return; }
-      if (mode === 'idle' || playbackComplete()) { resetPlayback(); }
-      mode = 'playing';
-      sync();
-      schedulePlayback();
-    });
-  }
-
-  if (previousButton) {
-    previousButton.addEventListener('click', function () {
-      if (!playbackCanStepBackward()) { return; }
-      clearTimer();
-      if (mode === 'idle') { resetPlayback(); mode = 'paused'; sync(); return; }
-      mode = 'paused';
-      var prev = getPreviousPlaybackState();
-      if (!prev) { resetPlayback(); sync(); return; }
-      turnIndex = prev.turnIndex;
-      visibleUnitIds = prev.revealedUnitIds;
-      sync();
-    });
-  }
-
-  if (nextButton) {
-    nextButton.addEventListener('click', function () {
-      if (playbackTurns.length === 0) { return; }
-      var wasStarted = mode !== 'idle';
-      clearTimer();
-      mode = 'paused';
-      if (!wasStarted || playbackComplete()) { resetPlayback(); sync(); return; }
-      var next = getNextPlaybackState();
-      if (!next) { sync(); return; }
-      turnIndex = next.turnIndex;
-      visibleUnitIds = next.revealedUnitIds;
-      sync();
-    });
-  }
-
-  if (speedButton) {
-    speedButton.addEventListener('click', function () {
-      speedIndex = (speedIndex + 1) % speeds.length;
-      sync();
-      if (mode === 'playing') { schedulePlayback(); }
-    });
-  }
-
-  if (content) {
-    content.addEventListener('scroll', onContentScroll);
-    content.addEventListener('pointerdown', markUserScrollIntent);
-    content.addEventListener('touchstart', markUserScrollIntent);
-    content.addEventListener('wheel', markUserScrollIntent);
-  }
-
-  sync();
-}())`
 }

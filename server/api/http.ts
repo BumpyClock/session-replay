@@ -1,4 +1,4 @@
-import type { ApiErrorResponse } from '../../src/lib/api/contracts'
+import type { z } from 'zod'
 import { ApiError } from './errors'
 
 const JSON_HEADERS = {
@@ -51,7 +51,7 @@ export function jsonResponse(
  */
 export function errorResponse(error: unknown, corsHeaders?: Headers): Response {
   if (error instanceof ApiError) {
-    return jsonResponse<ApiErrorResponse>(
+    return jsonResponse(
       {
         error: {
           code: error.code,
@@ -63,7 +63,7 @@ export function errorResponse(error: unknown, corsHeaders?: Headers): Response {
     )
   }
 
-  return jsonResponse<ApiErrorResponse>(
+  return jsonResponse(
     {
       error: {
         code: 'internal_error',
@@ -78,10 +78,20 @@ export function errorResponse(error: unknown, corsHeaders?: Headers): Response {
 /**
  * Parses JSON request bodies with 400-level failures.
  */
-export async function readJsonBody<T>(request: Request): Promise<T> {
+export async function readJsonBody<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
+  let body: unknown
+
   try {
-    return (await request.json()) as T
+    body = await request.json()
   } catch {
     throw new ApiError(400, 'invalid_json', 'Request body must be valid JSON')
   }
+
+  const result = schema.safeParse(body)
+
+  if (!result.success) {
+    throw new ApiError(400, 'invalid_request', 'Request body does not match the expected shape')
+  }
+
+  return result.data
 }

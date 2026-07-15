@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.all.tsbuildinfo",
+    "types": ["vite/client", "vitest/globals", "node", "bun"],
+    "strict": true,
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "server",
+    "scripts",
+    "test",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.setup.ts",
+    "tailwind.config.ts"
+  ]
+}

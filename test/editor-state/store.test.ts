@@ -1,12 +1,21 @@
 import { createJSONStorage, type StateStorage } from 'zustand/middleware'
-import type { MaterializedReplaySession } from '../../src/lib/api/contracts'
+import type { MaterializedReplaySession, ReplayBlock } from '../../src/lib/api/contracts'
 import {
   createEditorStore,
   createEmptySessionDraft,
   materializeReplayRenderRequest,
   materializeReplayRenderOptions,
   materializeReplaySession,
+  type PersistedEditorStoreState,
 } from '../../src/lib/editor'
+
+function getTextBlock(block: ReplayBlock | undefined): Exclude<ReplayBlock, { type: 'tool' }> {
+  if (!block || block.type === 'tool') {
+    throw new Error('Expected replay text block')
+  }
+
+  return block
+}
 
 function createMemoryStorage(): StateStorage {
   const state = new Map<string, string>()
@@ -59,21 +68,20 @@ function createFixtureSession(): MaterializedReplaySession {
             text: 'Hidden chain',
             type: 'thinking',
           },
-        ],
-        id: 'turn-2',
-        included: true,
-        index: 1,
-        role: 'assistant',
-        timestamp: '2026-04-12T08:00:02Z',
-        toolCalls: [
           {
             id: 'tool-1',
             input: '{"cmd":"ls"}',
             name: 'exec_command',
             output: 'ok',
             status: 'completed',
+            type: 'tool',
           },
         ],
+        id: 'turn-2',
+        included: true,
+        index: 1,
+        role: 'assistant',
+        timestamp: '2026-04-12T08:00:02Z',
       },
       {
         blocks: [
@@ -96,7 +104,7 @@ function createFixtureSession(): MaterializedReplaySession {
 
 describe('editor draft store', () => {
   it('persists client-only draft state keyed by session id', async () => {
-    const storage = createJSONStorage(() => createMemoryStorage())
+    const storage = createJSONStorage<PersistedEditorStoreState>(() => createMemoryStorage())
     const store = createEditorStore({
       persistKey: 'editor-draft-test',
       storage,
@@ -211,7 +219,7 @@ describe('editor materialization', () => {
 
     expect(materialized.title).toBe('Edited title')
     expect(materialized.description).toBe('Edited description')
-    expect(materialized.turns[1]?.blocks[0]?.text).toBe('Edited assistant text')
+    expect(getTextBlock(materialized.turns[1]?.blocks[0]).text).toBe('Edited assistant text')
     expect(materialized.turns[1]?.included).toBe(false)
     expect(materialized.bookmarks).toEqual([
       {
@@ -220,8 +228,8 @@ describe('editor materialization', () => {
         turnIndex: 1,
       },
     ])
-    expect(materialized.turns[1]?.toolCalls).toBe(session.turns[1]?.toolCalls)
-    expect(session.turns[1]?.blocks[0]?.text).toBe('Draft me later')
+    expect(materialized.turns[1]?.blocks[2]).toBe(session.turns[1]?.blocks[2])
+    expect(getTextBlock(session.turns[1]?.blocks[0]).text).toBe('Draft me later')
   })
 
   it('derives render options from client-side viewer state', () => {

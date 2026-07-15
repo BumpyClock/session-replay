@@ -160,7 +160,7 @@ function reclassifyCursorThinking(turn: NormalizedTurn): NormalizedTurn {
   return {
     ...turn,
     assistantBlocks: turn.assistantBlocks.map((block, index) => {
-      if (index === turn.assistantBlocks.length - 1) {
+      if (block.kind === 'tool-call' || index === turn.assistantBlocks.length - 1) {
         return block
       }
 

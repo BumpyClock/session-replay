@@ -1,5 +1,6 @@
 export type {
   IndexedSessionEntry,
+  NormalizedTurn,
   NormalizedSession,
   SessionCatalogProvider,
   SessionFileFingerprint,

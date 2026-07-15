@@ -1,10 +1,17 @@
-import React from 'react'
 import { act } from '@testing-library/react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { PlaybackSurface } from '../../src/features/playback/PlaybackSurface'
 import type { ReplaySession } from '../../src/features/preview/ReplayPanel'
-import { prepareTranscriptLayout } from '../../src/lib/replay/transcript-layout'
+import { createPlaybackTimeline } from '../../src/lib/replay/playback'
+import {
+  createPlaybackTurnsFromLayout,
+  prepareTranscriptLayout,
+} from '../../src/lib/replay/transcript-layout'
+import {
+  createParityPreviewSession,
+  PLAYBACK_PARITY_TRACE,
+} from '../fixtures/playback-parity'
 
 const session: ReplaySession = {
   cwd: '/repo',
@@ -80,6 +87,108 @@ const session: ReplaySession = {
 const layout = prepareTranscriptLayout(session.turns)
 
 describe('PlaybackSurface', () => {
+  it('matches the shared playback trace after applying its autoplay policy', () => {
+    vi.useFakeTimers()
+    try {
+      const paritySession = createParityPreviewSession()
+      const { container } = render(
+        <PlaybackSurface
+          session={paritySession}
+          layout={prepareTranscriptLayout(paritySession.turns)}
+          onExitPlayback={vi.fn()}
+        />,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Pause playback' }))
+      const next = screen.getByRole<HTMLButtonElement>('button', { name: 'Next step' })
+      const previous = screen.getByRole<HTMLButtonElement>('button', { name: 'Previous step' })
+      const observe = () => ({
+        activeUnitId: (container.querySelector('.replay-playback-unit.is-active') as HTMLElement | null)?.dataset.replayUnitId ?? null,
+        mode: screen.queryByRole('button', { name: 'Pause playback' }) ? 'playing' : 'paused',
+        nextDisabled: next.disabled,
+        previousDisabled: previous.disabled,
+        viewportState: (container.querySelector('[data-viewport-state]') as HTMLElement).dataset.viewportState,
+        visibleTurnIds: Array.from(container.querySelectorAll('.replay-turn'))
+          .filter((node) => !(node as HTMLElement).hidden)
+          .map((node) => (node as HTMLElement).dataset.turnId),
+        visibleUnitIds: Array.from(container.querySelectorAll('[data-turn-id="parity-assistant"] .replay-playback-unit'))
+          .filter((node) => !(node as HTMLElement).hidden)
+          .map((node) => (node as HTMLElement).dataset.replayUnitId)
+          .filter((id): id is string => Boolean(id)),
+      })
+      const trace = [observe()]
+
+      for (const action of [next, next, next, previous, next, next, next]) {
+        fireEvent.click(action)
+        trace.push(observe())
+      }
+
+      expect(trace).toEqual(PLAYBACK_PARITY_TRACE)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reschedules the active frame at a new speed without moving its cursor', () => {
+    vi.useFakeTimers()
+    try {
+      const timedSession: ReplaySession = {
+        ...session,
+        turns: [
+          session.turns[0],
+          {
+            ...session.turns[1],
+            blocks: [{ id: 'long-thinking', text: 'x'.repeat(900), type: 'thinking' }],
+          },
+        ],
+      }
+      const timedLayout = prepareTranscriptLayout(timedSession.turns)
+      const playbackTurns = createPlaybackTurnsFromLayout(timedSession.turns, timedLayout)
+      const timeline = createPlaybackTimeline(playbackTurns)
+      const assistantStartFrame = timeline.initialFrameIndexByTurn[1]
+      const expectedDelay = assistantStartFrame === undefined
+        ? undefined
+        : timeline.frames[assistantStartFrame]?.delayBySpeed['8']
+      if (typeof expectedDelay !== 'number') {
+        throw new Error('Expected a scheduled delay for the assistant start frame')
+      }
+
+      const { container, rerender } = render(
+        <PlaybackSurface
+          playbackSpeed={4}
+          session={timedSession}
+          layout={timedLayout}
+          onExitPlayback={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Pause playback' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+      const visibleUnitIds = () => Array.from(container.querySelectorAll('.replay-playback-unit'))
+        .filter((node) => !(node as HTMLElement).hidden)
+        .map((node) => (node as HTMLElement).dataset.replayUnitId)
+        .filter((id): id is string => Boolean(id))
+      const visibleBefore = visibleUnitIds()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Play transcript' }))
+      rerender(
+        <PlaybackSurface
+          playbackSpeed={8}
+          session={timedSession}
+          layout={timedLayout}
+          onExitPlayback={vi.fn()}
+        />,
+      )
+      expect(visibleUnitIds()).toEqual(visibleBefore)
+
+      act(() => vi.advanceTimersByTime(expectedDelay - 1))
+      expect(visibleUnitIds()).toEqual(visibleBefore)
+      act(() => vi.advanceTimersByTime(1))
+      expect(visibleUnitIds()).toEqual([...visibleBefore, 'long-thinking'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('auto-starts in playing mode and keeps shared replay and export actions visible', () => {
     vi.useFakeTimers()
     try {

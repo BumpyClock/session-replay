@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  deriveViewportState,
+  PLAYBACK_VIEWPORT_MANIFEST,
+  type PlaybackViewportState,
+} from '../../lib/replay/playback-viewport'
+
+export { deriveViewportState, type PlaybackViewportState } from '../../lib/replay/playback-viewport'
 
 /**
  * Explicit viewport states for the playback surface.
@@ -10,24 +17,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * - `user-detached` – user manually scrolled; auto-follow is disabled so
  *   playback does not snap back.
  */
-export type PlaybackViewportState =
-  | 'underflow-bottom-anchored'
-  | 'overflow-scrollable'
-  | 'user-detached'
-
-/** Pure derivation of viewport state from overflow and detach signals. */
-export function deriveViewportState(
-  hasOverflow: boolean,
-  userDetached: boolean,
-): PlaybackViewportState {
-  if (userDetached) return 'user-detached'
-  if (hasOverflow) return 'overflow-scrollable'
-  return 'underflow-bottom-anchored'
-}
-
-const PROGRAMMATIC_SCROLL_GUARD_MS = 150
-const USER_SCROLL_INTENT_WINDOW_MS = 500
-
 export interface UsePlaybackViewportResult {
   /** Current explicit viewport state. */
   viewportState: PlaybackViewportState
@@ -98,7 +87,7 @@ export function usePlaybackViewport(): UsePlaybackViewportResult {
 
     userScrollIntentTimeoutRef.current = window.setTimeout(() => {
       clearUserScrollIntent()
-    }, USER_SCROLL_INTENT_WINDOW_MS)
+    }, PLAYBACK_VIEWPORT_MANIFEST.userScrollIntentWindowMs)
   }, [clearUserScrollIntent])
 
   const onContentScroll = useCallback(() => {
@@ -138,7 +127,7 @@ export function usePlaybackViewport(): UsePlaybackViewportResult {
 
     programmaticScrollTimeoutRef.current = window.setTimeout(() => {
       clearProgrammaticScrollTracking()
-    }, PROGRAMMATIC_SCROLL_GUARD_MS)
+    }, PLAYBACK_VIEWPORT_MANIFEST.programmaticScrollGuardMs)
   }, [clearProgrammaticScrollTracking])
 
   const resetViewport = useCallback(() => {

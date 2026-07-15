@@ -14,10 +14,11 @@ export interface ApiServerOptions extends ApiHandlerOptions {
 /**
  * Starts the local replay HTTP server.
  */
-export function createApiServer(options: ApiServerOptions = {}): Server {
+export function createApiServer(options: ApiServerOptions = {}): Server<undefined> {
   const hostname = options.hostname ?? '127.0.0.1'
   const port = options.port ?? 4848
   const fetch = createApiHandler({
+    allowedOrigins: options.allowedOrigins,
     homeDirectory: options.homeDirectory ?? homedir(),
     sessionSource: options.sessionSource,
   })

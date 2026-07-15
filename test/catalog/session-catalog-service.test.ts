@@ -7,6 +7,26 @@ import type {
   SessionFileRef,
 } from '../../src/lib/session'
 
+function createDeferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolvePromise: ((value: T) => void) | undefined
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve
+  })
+
+  return {
+    promise,
+    resolve: (value) => {
+      if (!resolvePromise) {
+        throw new Error('Deferred promise was not initialized')
+      }
+      resolvePromise(value)
+    },
+  }
+}
+
 describe('SessionCatalogService', () => {
   it('reuses warm index/search/load state and skips reindex on unchanged refresh', async () => {
     const file = createFile('copilot:alpha/events.jsonl')
@@ -296,16 +316,11 @@ describe('SessionCatalogService', () => {
       transcriptText: 'indexed alpha transcript',
     })
 
-    let resolveIndex: ((value: IndexedSessionEntry) => void) | null = null
+    const indexResult = createDeferred<IndexedSessionEntry>()
     const provider: SessionCatalogProvider = {
       source: 'copilot',
       scan: vi.fn(async () => [file]),
-      index: vi.fn(
-        () =>
-          new Promise<IndexedSessionEntry>((resolve) => {
-            resolveIndex = resolve
-          }),
-      ),
+      index: vi.fn(() => indexResult.promise),
       load: vi.fn(async () => session),
     }
 
@@ -334,7 +349,7 @@ describe('SessionCatalogService', () => {
     )
     await expect(service.loadSession({ path: file.path })).resolves.toEqual(session)
 
-    resolveIndex?.(indexed)
+    indexResult.resolve(indexed)
     await vi.waitFor(async () => {
       await expect(service.listSessions()).resolves.toEqual([
         expect.objectContaining({
@@ -427,7 +442,150 @@ describe('SessionCatalogService', () => {
       )
     })
   })
+
+  it('ignores stale indexing completion after a newer refresh commits', async () => {
+    const staleFile = createFile('copilot:stale/events.jsonl', { mtimeMs: 60 })
+    const currentFile = createFile('copilot:current/events.jsonl', { mtimeMs: 70 })
+    const staleSession = createSession(staleFile, { project: 'stale', title: 'Stale session' })
+    const currentSession = createSession(currentFile, {
+      project: 'current',
+      title: 'Current session',
+    })
+    const staleEntry = createIndexedEntry(staleFile, staleSession, {
+      metadataText: 'stale session',
+      transcriptText: 'stale transcript',
+    })
+    const currentEntry = createIndexedEntry(currentFile, currentSession, {
+      metadataText: 'current session',
+      transcriptText: 'current transcript',
+    })
+    const staleIndexResult = createDeferred<IndexedSessionEntry>()
+    let scanGeneration: 'stale' | 'current' = 'stale'
+
+    const provider: SessionCatalogProvider = {
+      source: 'copilot',
+      scan: vi.fn(async () => scanGeneration === 'stale' ? [staleFile] : [currentFile]),
+      index: vi.fn((file) =>
+        file.path === staleFile.path ? staleIndexResult.promise : Promise.resolve(currentEntry),
+      ),
+      load: vi.fn(async (file) => file.path === staleFile.path ? staleSession : currentSession),
+    }
+    const service = new SessionCatalogService({ homeDir: '/tmp', providers: [provider] })
+    const state = service as unknown as {
+      indexingPromise: Promise<void> | null
+      initialized: boolean
+      sessionIndex: Map<string, IndexedSessionEntry>
+    }
+    state.initialized = true
+
+    await service.refresh()
+    const staleCompletion = state.indexingPromise
+    expect(staleCompletion).not.toBeNull()
+
+    scanGeneration = 'current'
+    await service.refresh()
+    await state.indexingPromise
+
+    const refsBeforeStaleCompletion = await service.listSessions()
+    const statusBeforeStaleCompletion = service.getCatalogStatus()
+    const indexBeforeStaleCompletion = [...state.sessionIndex.entries()]
+
+    staleIndexResult.resolve(staleEntry)
+    await staleCompletion
+
+    expect(await service.listSessions()).toEqual(refsBeforeStaleCompletion)
+    expect(service.getCatalogStatus()).toEqual(statusBeforeStaleCompletion)
+    expect([...state.sessionIndex.entries()]).toEqual(indexBeforeStaleCompletion)
+    expect(refsBeforeStaleCompletion).toEqual([currentEntry.ref])
+    expect(statusBeforeStaleCompletion).toEqual(
+      expect.objectContaining({
+        discoveredCount: 1,
+        indexedCount: 1,
+        pendingCount: 0,
+        stale: false,
+        state: 'ready',
+      }),
+    )
+  })
+
+  it('indexes 10,000 files without full-map scans per completion', async () => {
+    const fileCount = 10_000
+    const files = Array.from({ length: fileCount }, (_, index) =>
+      createFile(`copilot:bulk/session-${index}.jsonl`, { mtimeMs: index + 1 }),
+    )
+    const provider: SessionCatalogProvider = {
+      source: 'copilot',
+      scan: vi.fn(async () => files),
+      index: vi.fn(async (file) => {
+        const session = createSession(file, { title: file.relativePath })
+        return createIndexedEntry(file, session, {
+          metadataText: '',
+          transcriptText: '',
+        })
+      }),
+      load: vi.fn(async (file) => createSession(file)),
+    }
+    const service = new SessionCatalogService({ homeDir: '/tmp', providers: [provider] })
+    const fileIndex = new CountingMap<string, SessionFileRef>()
+    const sessionIndex = new CountingMap<string, IndexedSessionEntry>()
+    const state = service as unknown as {
+      fileIndex: Map<string, SessionFileRef>
+      indexingPromise: Promise<void> | null
+      initialized: boolean
+      sessionIndex: Map<string, IndexedSessionEntry>
+    }
+    state.fileIndex = fileIndex
+    state.sessionIndex = sessionIndex
+    state.initialized = true
+
+    await service.refresh()
+    await state.indexingPromise
+
+    expect(provider.index).toHaveBeenCalledTimes(fileCount)
+    expect(fileIndex.iterationVisits).toBe(0)
+    expect(sessionIndex.iterationVisits).toBe(0)
+    expect(fileIndex.size).toBe(fileCount)
+    expect(sessionIndex.size).toBe(fileCount)
+    expect(await service.listSessions()).toHaveLength(fileCount)
+    expect(service.getCatalogStatus()).toEqual(
+      expect.objectContaining({
+        discoveredCount: fileCount,
+        indexedCount: fileCount,
+        pendingCount: 0,
+        state: 'ready',
+      }),
+    )
+  }, 20_000)
 })
+
+class CountingMap<TKey, TValue> extends Map<TKey, TValue> {
+  public iterationVisits = 0
+
+  public override entries(): MapIterator<[TKey, TValue]> {
+    return this.count(super.entries())
+  }
+
+  public override keys(): MapIterator<TKey> {
+    return this.count(super.keys())
+  }
+
+  public override values(): MapIterator<TValue> {
+    return this.count(super.values())
+  }
+
+  public override [Symbol.iterator](): MapIterator<[TKey, TValue]> {
+    return this.entries()
+  }
+
+  private *count<TValueItem>(iterator: MapIterator<TValueItem>): MapIterator<TValueItem> {
+    for (const value of iterator) {
+      this.iterationVisits += 1
+      yield value
+    }
+
+    return undefined
+  }
+}
 
 function createFile(
   id: string,

@@ -64,9 +64,15 @@ describe('Codex provider', () => {
     })
     expect(loaded.cwd).toBe('/Users/dev/projects/alpha')
     expect(loaded.turns).toHaveLength(2)
-    expect(loaded.turns[0]?.systemBlocks[0]?.text).toContain('<session_meta>')
+    expect(loaded.turns[0]?.systemBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('<session_meta>'),
+    })
     expect(loaded.turns[1]?.userText).toBe('List my backlog')
-    expect(loaded.turns[1]?.assistantBlocks[0]?.text).toBe('I can do that.')
+    expect(loaded.turns[1]?.assistantBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: 'I can do that.',
+    })
     expect(loaded.turns[1]?.assistantBlocks[1]).toMatchObject({
       kind: 'tool-call',
       name: 'Bash',
@@ -76,7 +82,7 @@ describe('Codex provider', () => {
 
   it('keeps compat exports routed through catalog index/load flow', async () => {
     const sessionPath = await writeLegacyCodexSession(homeDirectory)
-    const compatProvider = createCodexProvider({ homeDirectory })
+    const compatProvider = createCodexProvider()
 
     expect(await compatProvider.scan({ homeDir: homeDirectory })).toHaveLength(1)
 
@@ -96,7 +102,10 @@ describe('Codex provider', () => {
     expect(loaded.cwd).toBe('/Users/dev/projects/alpha')
     expect(loaded.turns).toHaveLength(3)
     expect(loaded.turns[0]?.role).toBe('system')
-    expect(loaded.turns[1]?.blocks[0]?.text).toBe('List my backlog')
+    expect(loaded.turns[1]?.blocks[0]).toMatchObject({
+      text: 'List my backlog',
+      type: 'text',
+    })
     expect(loaded.turns[2]?.blocks[0]).toMatchObject({
       text: 'I can do that.',
       type: 'markdown',
@@ -114,7 +123,107 @@ describe('Codex provider', () => {
     expect(byTranscript).toHaveLength(1)
     expect(byTranscript[0]?.id).toBe(sessions[0]?.id)
   })
+
+  it('preserves modern codex exchange boundaries', async () => {
+    await writeModernCodexSession(homeDirectory, [
+      modernUserMessage('first request', '2026-04-13T12:00:01.000Z'),
+      modernAgentMessage('first answer', '2026-04-13T12:00:02.000Z'),
+      {
+        type: 'item.completed',
+        timestamp: '2026-04-13T12:00:03.000Z',
+        item: {
+          type: 'command_execution',
+          id: 'command-1',
+          command: 'echo first',
+          aggregated_output: 'first tool result',
+          exit_code: 0,
+        },
+      },
+      { type: 'turn_context', timestamp: '2026-04-13T12:00:04.000Z' },
+      modernUserMessage('second request', '2026-04-13T12:00:05.000Z'),
+      modernAgentMessage('second answer', '2026-04-13T12:00:06.000Z'),
+    ])
+    const provider = createSessionProvider()
+    const files = await provider.scan({ homeDir: homeDirectory })
+    const indexed = await provider.index(files[0]!)
+    const loaded = await provider.load(files[0]!)
+    const contentTurns = loaded.turns.filter(
+      (turn) => turn.userText || turn.assistantBlocks.length > 0,
+    )
+
+    expect(contentTurns).toHaveLength(2)
+    expect(contentTurns.map((turn) => turn.userText)).toEqual(['first request', 'second request'])
+    expect(contentTurns[0]?.assistantBlocks).toEqual([
+      expect.objectContaining({ kind: 'text', text: 'first answer' }),
+      expect.objectContaining({ kind: 'tool-call', name: 'Bash', result: 'first tool result' }),
+    ])
+    expect(contentTurns[1]?.assistantBlocks).toEqual([
+      expect.objectContaining({ kind: 'text', text: 'second answer' }),
+    ])
+    expect(contentTurns[0]?.id).not.toBe(contentTurns[1]?.id)
+    expect(contentTurns[0]?.index).toBeLessThan(contentTurns[1]!.index)
+    expect(loaded.turns.filter((turn) => turn.systemBlocks.length > 0)).toHaveLength(2)
+    expect(indexed.ref.stats).toMatchObject({
+      turnCount: 6,
+      userTurnCount: 2,
+      assistantTurnCount: 2,
+    })
+  })
+
+  it('keeps an assistant-only modern transcript', async () => {
+    await writeModernCodexSession(homeDirectory, [
+      modernAgentMessage('orphaned answer', '2026-04-13T12:00:01.000Z'),
+    ])
+    const provider = createSessionProvider()
+    const files = await provider.scan({ homeDir: homeDirectory })
+    const loaded = await provider.load(files[0]!)
+    const contentTurns = loaded.turns.filter((turn) => turn.assistantBlocks.length > 0)
+
+    expect(contentTurns).toHaveLength(1)
+    expect(contentTurns[0]?.userText).toBe('')
+    expect(contentTurns[0]?.assistantBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: 'orphaned answer',
+    })
+  })
 })
+
+function modernUserMessage(text: string, timestamp: string) {
+  return {
+    type: 'item.completed',
+    timestamp,
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text }],
+    },
+  }
+}
+
+function modernAgentMessage(text: string, timestamp: string) {
+  return {
+    type: 'item.completed',
+    timestamp,
+    item: { type: 'agent_message', text },
+  }
+}
+
+async function writeModernCodexSession(
+  homeDirectory: string,
+  entries: readonly Record<string, unknown>[],
+): Promise<string> {
+  const dayPath = join(homeDirectory, '.codex', 'sessions', '2026', '04', '13')
+  await mkdir(dayPath, { recursive: true })
+  const sessionPath = join(dayPath, 'rollout-2026-04-13T12-00-00-project-modern.jsonl')
+  const sessionMeta = {
+    type: 'session_meta',
+    timestamp: '2026-04-13T12:00:00.000Z',
+    payload: { cwd: '/Users/dev/projects/modern' },
+  }
+
+  await writeFile(sessionPath, [sessionMeta, ...entries].map((entry) => JSON.stringify(entry)).join('\n'))
+  return sessionPath
+}
 
 async function writeLegacyCodexSession(homeDirectory: string): Promise<string> {
   const dayPath = join(homeDirectory, '.codex', 'sessions', '2026', '04', '13')

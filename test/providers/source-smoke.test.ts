@@ -6,23 +6,24 @@ import type {
 import { createSessionSource, type ProviderDescriptor } from '../../server/providers/index'
 import type { SessionCatalogProvider } from '../../server/catalog'
 import type { NormalizedSession } from '../../src/lib/session'
+import type { SessionSource } from '../../src/lib/session/contracts'
 
 describe('createSessionSource', () => {
   it('merges provider sessions, skips missing modules, routes load by cached ref', async () => {
-    const claudeSession: SessionRef = {
+    const claudeSession = {
       id: 'claude-1',
       path: '/tmp/claude-1.jsonl',
       source: 'claude-code',
       title: 'Claude Session',
       updatedAt: '2026-04-13T10:00:00.000Z',
-    }
-    const codexSession: SessionRef = {
+    } satisfies SessionRef & { source: SessionSource }
+    const codexSession = {
       id: 'codex-1',
       path: '/tmp/codex-1.jsonl',
       source: 'codex',
       title: 'Codex Session',
       updatedAt: '2026-04-14T10:00:00.000Z',
-    }
+    } satisfies SessionRef & { source: SessionSource }
     const codexLoadedSession: MaterializedReplaySession = {
       id: codexSession.id,
       title: codexSession.title,
@@ -30,7 +31,7 @@ describe('createSessionSource', () => {
       turns: [],
     }
     const createProvider = (
-      session: SessionRef,
+      session: SessionRef & { source: SessionSource },
       searchText: string,
       normalizedSession: NormalizedSession,
     ): SessionCatalogProvider => ({

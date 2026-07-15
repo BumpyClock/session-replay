@@ -1,10 +1,12 @@
 import { ChevronLeft, ChevronRight, Download, Pause, Play, Settings2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  getActivePlaybackUnitId,
-  getNextPlaybackDelay,
-  getNextPlaybackState,
-  getPreviousPlaybackState,
+  createPlaybackTimeline,
+  getNextPlaybackFrameIndex,
+  getPlaybackFrame,
+  getPreviousPlaybackFrameIndex,
+  getVisiblePlaybackUnitIds,
+  isPlaybackTimelineComplete,
 } from '../../lib/replay/playback'
 import {
   collectDefaultOpenIds,
@@ -44,8 +46,7 @@ function PlaybackSurface({
 }: PlaybackSurfaceProps) {
   const [expandedBlockIds, setExpandedBlockIds] = useState<Set<string>>(() => collectDefaultOpenIds(layout))
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('playing')
-  const [playbackTurnIndex, setPlaybackTurnIndex] = useState(0)
-  const [revealedUnitIds, setRevealedUnitIds] = useState<Set<string>>(new Set())
+  const [frameIndex, setFrameIndex] = useState(0)
   const {
     checkOverflow,
     contentNodeRef,
@@ -72,20 +73,17 @@ function PlaybackSurface({
     [playbackTurns],
   )
 
-  const activePlaybackTurn = playbackTurns[playbackTurnIndex]
-  const activePlaybackUnitId = useMemo(
-    () => getActivePlaybackUnitId(activePlaybackTurn, revealedUnitIds),
-    [activePlaybackTurn, revealedUnitIds],
+  const playbackTimeline = useMemo(() => createPlaybackTimeline(playbackTurns), [playbackTurns])
+  const playbackFrame = getPlaybackFrame(playbackTimeline, frameIndex)
+  const playbackTurnIndex = playbackFrame?.turnIndex ?? 0
+  const revealedUnitIds = useMemo(
+    () => getVisiblePlaybackUnitIds(playbackTurns, playbackFrame),
+    [playbackFrame, playbackTurns],
   )
+  const activePlaybackUnitId = playbackFrame?.activeUnitId ?? null
 
-  const playbackComplete =
-    playbackTurns.length > 0
-    && playbackTurnIndex >= playbackTurns.length - 1
-    && playbackTurns.every((turn) => turn.units.every((unit) => revealedUnitIds.has(unit.id)))
-
-  const playbackCanStepBackward = playbackTurns.length > 0 && Boolean(
-    playbackTurnIndex > 0 || activePlaybackTurn?.units.some((unit) => revealedUnitIds.has(unit.id)),
-  )
+  const playbackComplete = isPlaybackTimelineComplete(playbackTimeline, frameIndex)
+  const playbackCanStepBackward = getPreviousPlaybackFrameIndex(frameIndex) !== null
 
   const displayedTurns = useMemo(() => {
     return session.turns.filter((turn) => {
@@ -167,31 +165,28 @@ function PlaybackSurface({
 
   const resetPlayback = useCallback(() => {
     resetViewport()
-    setPlaybackTurnIndex(0)
-    setRevealedUnitIds(new Set())
+    setFrameIndex(0)
   }, [resetViewport])
 
   const stepPlaybackForward = useCallback(() => {
-    const nextState = getNextPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
-    if (!nextState) {
+    const nextFrameIndex = getNextPlaybackFrameIndex(playbackTimeline, frameIndex)
+    if (nextFrameIndex === null) {
       setPlaybackMode('paused')
       return
     }
 
-    setPlaybackTurnIndex(nextState.turnIndex)
-    setRevealedUnitIds(nextState.revealedUnitIds)
-  }, [playbackTurnIndex, playbackTurns, revealedUnitIds])
+    setFrameIndex(nextFrameIndex)
+  }, [frameIndex, playbackTimeline])
 
   const stepPlaybackBackward = useCallback(() => {
-    const previousState = getPreviousPlaybackState(playbackTurns, playbackTurnIndex, revealedUnitIds)
-    if (!previousState) {
+    const previousFrameIndex = getPreviousPlaybackFrameIndex(frameIndex)
+    if (previousFrameIndex === null) {
       resetPlayback()
       return
     }
 
-    setPlaybackTurnIndex(previousState.turnIndex)
-    setRevealedUnitIds(previousState.revealedUnitIds)
-  }, [playbackTurnIndex, playbackTurns, resetPlayback, revealedUnitIds])
+    setFrameIndex(previousFrameIndex)
+  }, [frameIndex, resetPlayback])
 
   // Playback timer
   useEffect(() => {
@@ -199,7 +194,7 @@ function PlaybackSurface({
       return
     }
 
-    const delayMs = getNextPlaybackDelay(playbackTurns, playbackTurnIndex, revealedUnitIds, playbackSpeed)
+    const delayMs = playbackFrame?.delayBySpeed[String(playbackSpeed)] ?? null
     if (delayMs === null) {
       setPlaybackMode('paused')
       return
@@ -212,7 +207,7 @@ function PlaybackSurface({
     return () => {
       window.clearTimeout(timer)
     }
-  }, [playbackMode, playbackSpeed, playbackTurnIndex, playbackTurns, revealedUnitIds, stepPlaybackForward])
+  }, [playbackFrame, playbackMode, playbackSpeed, stepPlaybackForward])
 
   // Re-check overflow when displayed content changes
   useEffect(() => {

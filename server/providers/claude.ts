@@ -16,6 +16,7 @@ import type {
 import { toMaterializedReplaySession } from '../../src/lib/session/materialize'
 import type {
   NormalizedSession,
+  SessionRef as NormalizedSessionRef,
   SessionSource,
   SessionSourceMeta,
   SessionTextBlockKind,
@@ -116,7 +117,7 @@ export async function loadClaudeSession(
   const { entries, warnings } = await readJsonLines<ClaudeJsonLine>(safePath)
   const parsed = parseTurns(entries, safePath)
 
-  const fallbackRef: SessionRef = {
+  const fallbackRef: NormalizedSessionRef = {
     id: normalizePathForId(safePath),
     title: basenameWithoutExtension(safePath),
     source: CLAUDE_SOURCE,
@@ -130,7 +131,16 @@ export async function loadClaudeSession(
   }
 
   const normalizedSession: NormalizedSession = {
-    ref: existingRef ?? fallbackRef,
+    ref: existingRef
+      ? {
+          ...existingRef,
+          source: CLAUDE_SOURCE,
+          project: existingRef.project ?? fallbackRef.project,
+          cwd: existingRef.cwd ?? null,
+          startedAt: existingRef.startedAt ?? null,
+          updatedAt: existingRef.updatedAt ?? null,
+        }
+      : fallbackRef,
     cwd: null,
     warnings: warnings.map((warning): SessionWarning => ({
       code: warning.code,
@@ -169,7 +179,7 @@ export async function loadClaudeSession(
               id: `${turn.id}:block:${blockIndex}`,
               kind: block.kind,
               text: block.text,
-              timestamp: block.timestamp ?? undefined,
+              timestamp: block.timestamp,
               sourceMeta: {
                 provider: CLAUDE_SOURCE,
                 filePath: safePath,
@@ -204,9 +214,9 @@ function mapSessionFileToRef(
     source: CLAUDE_SOURCE,
     path,
     project: deriveProjectName(projectSegment),
-    startedAt: updatedAt,
-    updatedAt,
-    cwd: null,
+    startedAt: updatedAt ?? undefined,
+    updatedAt: updatedAt ?? undefined,
+    cwd: undefined,
     summary: undefined,
     stats: undefined,
   }
@@ -349,7 +359,10 @@ function parseTurns(
         if (turns.length > 0) {
           const lastTurn = turns[turns.length - 1]
           lastTurn.assistantBlocks.push(...normalizedBlocks)
-          lastTurn.sourceMeta.lineEnd = Math.max(lastTurn.sourceMeta.lineEnd, sourceMeta.lineEnd)
+          lastTurn.sourceMeta.lineEnd = Math.max(
+            lastTurn.sourceMeta.lineEnd ?? entry.line,
+            sourceMeta.lineEnd ?? entry.line,
+          )
         } else {
           turnCounter += 1
           turns.push({
@@ -596,7 +609,7 @@ function extractTextFromContent(content: unknown): string {
     return ''
   }
 
-  return cleanSystemTags(
+  return extractSystemTags(
     content
       .filter((part) => part && typeof part === 'object' && part.type === 'text')
       .map((part) => String(part?.text ?? ''))

@@ -297,8 +297,8 @@ function completeCopilotToolCall(turn: NormalizedTurn, entry: JsonLineEntry<Copi
 
   const toolCall = [...turn.assistantBlocks]
     .reverse()
-    .find((candidate) => candidate.kind === 'tool-call' && candidate.id === data.toolCallId)
-  if (!toolCall) {
+    .find((candidate) => candidate.id === data.toolCallId)
+  if (!toolCall || toolCall.kind !== 'tool-call') {
     return
   }
 

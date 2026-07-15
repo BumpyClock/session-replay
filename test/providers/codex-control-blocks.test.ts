@@ -86,9 +86,18 @@ describe('codex control block ingest', () => {
     const files = await provider.scan({ homeDir: homeDirectory })
     const loaded = await provider.load(files[0]!)
 
-    expect(loaded.turns[0]?.systemBlocks[0]?.text).toContain('<session_meta>')
-    expect(loaded.turns[1]?.systemBlocks[0]?.text).toContain('<turn_context>')
-    expect(loaded.turns[2]?.systemBlocks[0]?.text).toContain('<permissions instructions>')
+    expect(loaded.turns[0]?.systemBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('<session_meta>'),
+    })
+    expect(loaded.turns[1]?.systemBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('<turn_context>'),
+    })
+    expect(loaded.turns[2]?.systemBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('<permissions instructions>'),
+    })
     expect(loaded.turns[2]?.userText).toBe('Inspect auth flow')
     expect(loaded.turns[2]?.assistantBlocks[0]).toMatchObject({
       kind: 'text',

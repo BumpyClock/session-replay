@@ -6,10 +6,10 @@ import { LINE_HEIGHT_BODY_PX, LINE_HEIGHT_CODE_PX } from '../../src/lib/text-lay
 describe('height estimator', () => {
   it('uses fallback line count when pretext is not eligible', () => {
     const meta = {
-      category: 'code',
+      category: 'code' as const,
       fallbackLineCount: 3,
-      fontShorthand: null,
-      lineHeightPx: null,
+      fontShorthand: '13px monospace',
+      lineHeightPx: LINE_HEIGHT_CODE_PX,
       measurableText: null,
       pretextEligible: false,
       whiteSpaceMode: 'pre-wrap' as const,

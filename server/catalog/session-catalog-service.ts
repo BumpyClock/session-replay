@@ -55,7 +55,6 @@ export class SessionCatalogService {
   private catalogWarnings: SessionWarning[] = []
   private catalogStatus: SessionCatalogStatus = createEmptyCatalogStatus()
   private readonly fileIndex = new Map<string, SessionFileRef>()
-  private readonly idIndex = new Map<string, string>()
   private readonly fullSessionCache = new Map<string, CachedSession>()
   private readonly inflightIndex = new Map<string, Promise<IndexedSessionEntry>>()
   private readonly inflightLoad = new Map<string, Promise<NormalizedSession>>()
@@ -67,13 +66,16 @@ export class SessionCatalogService {
   private refreshGeneration = 0
   private readonly sessionIndex = new Map<string, IndexedSessionEntry>()
   private readonly sessionRefIndex = new Map<string, SessionRef>()
+  private indexedSnapshotCount = 0
   private snapshotIsStale = false
   private snapshotTimestamp = new Date(0).toISOString()
 
   private initialized = false
+  private readonly options: SessionCatalogServiceOptions
   private refreshPromise: Promise<void> | null = null
 
-  public constructor(private readonly options: SessionCatalogServiceOptions) {
+  public constructor(options: SessionCatalogServiceOptions) {
+    this.options = options
     for (const provider of options.providers) {
       this.providerBySource.set(provider.source, provider)
     }
@@ -181,7 +183,6 @@ export class SessionCatalogService {
     const nextFileIndex = new Map<string, SessionFileRef>()
     const nextSessionIndex = new Map<string, IndexedSessionEntry>()
     const nextSessionRefIndex = new Map<string, SessionRef>()
-    const nextIdIndex = new Map<string, string>()
     const nextFullSessionCache = new Map<string, CachedSession>()
     const changedFiles: SessionFileRef[] = []
 
@@ -196,7 +197,6 @@ export class SessionCatalogService {
           nextFileIndex,
           nextSessionRefIndex,
           nextSessionIndex,
-          nextIdIndex,
           nextFullSessionCache,
         )
         continue
@@ -213,7 +213,6 @@ export class SessionCatalogService {
         if (isSameFingerprint && previousIndexedEntry) {
           nextSessionRefIndex.set(file.path, previousIndexedEntry.ref)
           nextSessionIndex.set(file.path, previousIndexedEntry)
-          nextIdIndex.set(previousIndexedEntry.ref.id, file.path)
 
           const cachedSession = this.fullSessionCache.get(file.path)
           if (cachedSession && sameFileFingerprint(cachedSession.file, file)) {
@@ -225,7 +224,6 @@ export class SessionCatalogService {
 
         const discoveredRef = previousRef ?? createDiscoveredSessionRef(file)
         nextSessionRefIndex.set(file.path, discoveredRef)
-        nextIdIndex.set(discoveredRef.id, file.path)
         changedFiles.push(file)
       }
     }
@@ -233,8 +231,8 @@ export class SessionCatalogService {
     replaceMap(this.fileIndex, nextFileIndex)
     replaceMap(this.sessionIndex, nextSessionIndex)
     replaceMap(this.sessionRefIndex, nextSessionRefIndex)
-    replaceMap(this.idIndex, nextIdIndex)
     replaceMap(this.fullSessionCache, nextFullSessionCache)
+    this.indexedSnapshotCount = nextSessionIndex.size
 
     this.catalogWarnings = warnings
     this.pendingIndexPaths.clear()
@@ -273,7 +271,6 @@ export class SessionCatalogService {
     nextFileIndex: Map<string, SessionFileRef>,
     nextSessionRefIndex: Map<string, SessionRef>,
     nextSessionIndex: Map<string, IndexedSessionEntry>,
-    nextIdIndex: Map<string, string>,
     nextFullSessionCache: Map<string, CachedSession>,
   ): void {
     for (const file of this.fileIndex.values()) {
@@ -286,13 +283,11 @@ export class SessionCatalogService {
       const sessionRef = this.sessionRefIndex.get(file.path)
       if (sessionRef) {
         nextSessionRefIndex.set(file.path, sessionRef)
-        nextIdIndex.set(sessionRef.id, file.path)
       }
 
       const indexedEntry = this.sessionIndex.get(file.path)
       if (indexedEntry) {
         nextSessionIndex.set(file.path, indexedEntry)
-        nextIdIndex.set(indexedEntry.ref.id, file.path)
       }
 
       const cachedSession = this.fullSessionCache.get(file.path)
@@ -338,13 +333,18 @@ export class SessionCatalogService {
 
       if (result.warning) {
         nextWarnings.push(result.warning)
-        this.sessionIndex.delete(file.path)
+        if (this.sessionIndex.delete(file.path)) {
+          this.indexedSnapshotCount -= 1
+        }
       }
 
       if (result.entry) {
+        const wasIndexed = this.sessionIndex.has(file.path)
         this.sessionIndex.set(file.path, result.entry)
+        if (!wasIndexed) {
+          this.indexedSnapshotCount += 1
+        }
         this.sessionRefIndex.set(file.path, result.entry.ref)
-        this.updateIdIndexForPath(file.path, result.entry.ref)
       }
 
       this.catalogWarnings = dedupeWarnings(nextWarnings)
@@ -370,38 +370,12 @@ export class SessionCatalogService {
   private updateCatalogStatus(): void {
     this.catalogStatus = {
       discoveredCount: this.fileIndex.size,
-      indexedCount: this.countIndexedSnapshotFiles(),
+      indexedCount: this.indexedSnapshotCount,
       pendingCount: this.pendingIndexPaths.size,
       snapshotAt: this.snapshotTimestamp,
       stale: this.snapshotIsStale,
       state: this.pendingIndexPaths.size > 0 ? this.pendingState : 'ready',
     }
-  }
-
-  private countIndexedSnapshotFiles(): number {
-    let count = 0
-
-    for (const path of this.fileIndex.keys()) {
-      if (this.pendingIndexPaths.has(path)) {
-        continue
-      }
-
-      if (this.sessionIndex.has(path)) {
-        count += 1
-      }
-    }
-
-    return count
-  }
-
-  private updateIdIndexForPath(path: string, ref: Readonly<SessionRef>): void {
-    for (const [id, existingPath] of this.idIndex.entries()) {
-      if (existingPath === path && id !== ref.id) {
-        this.idIndex.delete(id)
-      }
-    }
-
-    this.idIndex.set(ref.id, path)
   }
 
   private async scanProvider(provider: SessionCatalogProvider): Promise<ProviderScanResult> {
@@ -529,9 +503,12 @@ export class SessionCatalogService {
   private commitLoadedSession(file: Readonly<SessionFileRef>, session: Readonly<NormalizedSession>): void {
     const entry = createIndexedSessionEntry(file, session)
 
+    const wasIndexed = this.sessionIndex.has(file.path)
     this.sessionIndex.set(file.path, entry)
+    if (!wasIndexed) {
+      this.indexedSnapshotCount += 1
+    }
     this.sessionRefIndex.set(file.path, entry.ref)
-    this.updateIdIndexForPath(file.path, entry.ref)
     this.pendingIndexPaths.delete(file.path)
     this.catalogWarnings = this.catalogWarnings.filter(
       (warning) => !(warning.code === 'catalog_index_failed' && warning.filePath === file.path),

@@ -1,7 +1,7 @@
-import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { MaterializedReplaySession, SessionLoadResponse } from '../../src/lib/api/contracts'
 import { DEFAULT_FILTERS, browserPrefsStore } from '../../src/lib/browser/store'
 
 const { listSessionsMock, loadSessionMock, exportSessionDocumentMock } =
@@ -18,6 +18,17 @@ const localStorageMock = {
   length: 0,
   removeItem: vi.fn(),
   setItem: vi.fn(),
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+
+  return { promise, reject, resolve }
 }
 
 vi.mock('../../src/lib/api/client', () => ({
@@ -253,6 +264,194 @@ describe('App flow', () => {
     await user.type(screen.getByRole('textbox'), 'sample')
 
     await waitFor(() => expect(loadSessionMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps the newest session when loads resolve out of order', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-a',
+          source: 'claude-code',
+          path: '/tmp/session-a.jsonl',
+          title: 'Session A',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+        },
+        {
+          id: 'session-b',
+          source: 'claude-code',
+          path: '/tmp/session-b.jsonl',
+          title: 'Session B',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:01:00.000Z',
+          startedAt: null,
+        },
+      ],
+    })
+    const sessionA = deferred<SessionLoadResponse>()
+    const sessionB = deferred<SessionLoadResponse>()
+    loadSessionMock
+      .mockReturnValueOnce(sessionA.promise)
+      .mockReturnValueOnce(sessionB.promise)
+
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /session a/i }))
+    await user.click(screen.getByRole('button', { name: /session b/i }))
+    expect(loadSessionMock).toHaveBeenCalledTimes(2)
+
+    const firstSignal = loadSessionMock.mock.calls[0]?.[1] as AbortSignal | undefined
+    const secondSignal = loadSessionMock.mock.calls[1]?.[1] as AbortSignal | undefined
+    expect(firstSignal).toBeInstanceOf(AbortSignal)
+    expect(firstSignal?.aborted).toBe(true)
+    expect(secondSignal).toBeInstanceOf(AbortSignal)
+    expect(secondSignal?.aborted).toBe(false)
+
+    sessionB.resolve({ session: createLoadedSession('session-b', 'Session B', 'session B response') })
+    await waitFor(() => expect(screen.getByText('session B response')).toBeInTheDocument())
+
+    sessionA.resolve({ session: createLoadedSession('session-a', 'Session A', 'session A response') })
+    await waitFor(() => expect(screen.queryByText('session A response')).not.toBeInTheDocument())
+    expect(screen.getByText('session B response')).toBeInTheDocument()
+  })
+
+  it('ignores a stale load rejection after the newest session succeeds', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-a',
+          source: 'claude-code',
+          path: '/tmp/session-a.jsonl',
+          title: 'Session A',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+        },
+        {
+          id: 'session-b',
+          source: 'claude-code',
+          path: '/tmp/session-b.jsonl',
+          title: 'Session B',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:01:00.000Z',
+          startedAt: null,
+        },
+      ],
+    })
+    const sessionA = deferred<SessionLoadResponse>()
+    const sessionB = deferred<SessionLoadResponse>()
+    loadSessionMock
+      .mockReturnValueOnce(sessionA.promise)
+      .mockReturnValueOnce(sessionB.promise)
+
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /session a/i }))
+    await user.click(screen.getByRole('button', { name: /session b/i }))
+
+    await act(async () => {
+      sessionB.resolve({ session: createLoadedSession('session-b', 'Session B', 'session B response') })
+      await sessionB.promise
+    })
+    expect(screen.getByText('session B response')).toBeInTheDocument()
+
+    await act(async () => {
+      sessionA.reject(new Error('stale session A failure'))
+      await expect(sessionA.promise).rejects.toThrow('stale session A failure')
+    })
+
+    expect(screen.queryByText('stale session A failure')).not.toBeInTheDocument()
+    expect(screen.getByText('session B response')).toBeInTheDocument()
+  })
+
+  it('keeps loading while the newest session is pending after a stale load settles', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-a',
+          source: 'claude-code',
+          path: '/tmp/session-a.jsonl',
+          title: 'Session A',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+        },
+        {
+          id: 'session-b',
+          source: 'claude-code',
+          path: '/tmp/session-b.jsonl',
+          title: 'Session B',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:01:00.000Z',
+          startedAt: null,
+        },
+      ],
+    })
+    const sessionA = deferred<SessionLoadResponse>()
+    const sessionB = deferred<SessionLoadResponse>()
+    loadSessionMock
+      .mockReturnValueOnce(sessionA.promise)
+      .mockReturnValueOnce(sessionB.promise)
+
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /session a/i }))
+    await user.click(screen.getByRole('button', { name: /session b/i }))
+
+    await act(async () => {
+      sessionA.resolve({ session: createLoadedSession('session-a', 'Session A', 'session A response') })
+      await sessionA.promise
+    })
+
+    expect(screen.getByText('Loading selected session…')).toBeInTheDocument()
+    expect(screen.queryByText('session A response')).not.toBeInTheDocument()
+
+    await act(async () => {
+      sessionB.resolve({ session: createLoadedSession('session-b', 'Session B', 'session B response') })
+      await sessionB.promise
+    })
+    expect(screen.queryByText('Loading selected session…')).not.toBeInTheDocument()
+    expect(screen.getByText('session B response')).toBeInTheDocument()
+  })
+
+  it('aborts the active session load when the app unmounts', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-a',
+          source: 'claude-code',
+          path: '/tmp/session-a.jsonl',
+          title: 'Session A',
+          project: 'sample-project',
+          updatedAt: '2026-04-13T10:00:00.000Z',
+          startedAt: null,
+        },
+      ],
+    })
+    const sessionA = deferred<SessionLoadResponse>()
+    loadSessionMock.mockReturnValueOnce(sessionA.promise)
+
+    const { default: App } = await import('../../src/App')
+    const user = userEvent.setup()
+    const { unmount } = render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /session a/i }))
+    const signal = loadSessionMock.mock.calls[0]?.[1] as AbortSignal | undefined
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal?.aborted).toBe(false)
+
+    unmount()
+
+    expect(signal?.aborted).toBe(true)
+    sessionA.resolve({ session: createLoadedSession('session-a', 'Session A', 'session A response') })
+    await sessionA.promise
   })
 
   it('filters the sidebar without reloading the selected session', async () => {
@@ -502,3 +701,29 @@ describe('App flow', () => {
     expect(await screen.findByRole('button', { name: /recovered session/i })).toBeInTheDocument()
   }, 5000)
 })
+
+function createLoadedSession(
+  id: string,
+  title: string,
+  responseText: string,
+): MaterializedReplaySession {
+  return {
+    id,
+    title,
+    source: 'claude-code',
+    project: 'sample-project',
+    cwd: '/repo',
+    summary: title,
+    startedAt: '2026-04-13T10:00:00.000Z',
+    updatedAt: '2026-04-13T10:00:00.000Z',
+    turns: [
+      {
+        id: `${id}-turn`,
+        index: 0,
+        role: 'assistant',
+        included: true,
+        blocks: [{ id: `${id}-block`, type: 'text', text: responseText }],
+      },
+    ],
+  }
+}

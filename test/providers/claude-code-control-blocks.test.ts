@@ -52,7 +52,10 @@ describe('claude-code control block ingest', () => {
     const files = await provider.scan({ homeDir })
     const loaded = await provider.load(files[0]!)
 
-    expect(loaded.turns[0]?.systemBlocks[0]?.text).toContain('<claude_attachment>')
+    expect(loaded.turns[0]?.systemBlocks[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('<claude_attachment>'),
+    })
     expect(loaded.turns[1]?.userText).toBe('Check auth flow')
     expect(loaded.turns[1]?.assistantBlocks[0]).toMatchObject({
       kind: 'text',

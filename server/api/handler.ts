@@ -3,24 +3,33 @@ import type {
   SessionListResponse,
   SessionLoadRequest,
   SessionLoadResponse,
-  SessionRenderRequest,
-  SessionSearchRequest,
   SessionSearchResponse,
 } from '../../src/lib/api/contracts'
+import {
+  sessionLoadRequestSchema,
+  sessionRenderRequestSchema,
+  sessionSearchRequestSchema,
+} from '../../src/lib/api/schemas'
 import { renderReplayDocument, sanitizeDownloadName } from '../export/render-replay-document'
 import { ApiError } from './errors'
 import { createCorsHeaders, errorResponse, jsonResponse, readJsonBody } from './http'
 import { API_HEALTH_PATH, API_SESSIONS_PATH, API_SESSIONS_REFRESH_PATH } from './routes'
-import { assertLocalRequest, assertPathInsideHome } from './security'
+import { assertLocalRequest, assertPathInsideHome, normalizeAllowedOrigins } from './security'
 import { createEmptySessionSource, type SessionSource } from './session-source'
 
 /**
  * Immutable runtime dependencies for the local replay API.
  */
 export interface ApiHandlerOptions {
+  allowedOrigins?: readonly string[]
   homeDirectory?: string
   sessionSource?: SessionSource
 }
+
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:4173',
+] as const
 
 /**
  * Creates the request handler used by the Bun HTTP server and tests.
@@ -28,12 +37,13 @@ export interface ApiHandlerOptions {
 export function createApiHandler(options: ApiHandlerOptions = {}): (request: Request) => Promise<Response> {
   const sessionSource = options.sessionSource ?? createEmptySessionSource()
   const homeDirectory = options.homeDirectory ?? homedir()
+  const allowedOrigins = [...normalizeAllowedOrigins(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS)]
 
   return async (request) => {
     let corsHeaders: Headers | undefined
 
     try {
-      const origin = assertLocalRequest(request)
+      const origin = assertLocalRequest(request, allowedOrigins)
       corsHeaders = createCorsHeaders(origin)
 
       if (request.method === 'OPTIONS') {
@@ -65,7 +75,7 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
       }
 
       if (request.method === 'POST' && pathname === '/api/load') {
-        const body = await readJsonBody<SessionLoadRequest>(request)
+        const body = await readJsonBody(request, sessionLoadRequestSchema)
         const resolvedRequest = normalizeLoadRequest(body, homeDirectory)
         const response: SessionLoadResponse = {
           session: await sessionSource.loadSession(resolvedRequest),
@@ -75,7 +85,7 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
       }
 
       if (request.method === 'POST' && pathname === '/api/search') {
-        const body = await readJsonBody<SessionSearchRequest>(request)
+        const body = await readJsonBody(request, sessionSearchRequestSchema)
         const query = body.query.trim()
 
         if (!query) {
@@ -90,8 +100,7 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
       }
 
       if (request.method === 'POST' && pathname === '/api/export') {
-        const body = await readJsonBody<SessionRenderRequest>(request)
-        assertRenderRequest(body)
+        const body = await readJsonBody(request, sessionRenderRequestSchema)
         const html = renderReplayDocument(body.session, body.options)
         const { searchParams } = new URL(request.url)
         const fileName = sanitizeDownloadName(
@@ -121,7 +130,7 @@ export function createApiHandler(options: ApiHandlerOptions = {}): (request: Req
 
 function createSessionListResponse(
   sessionSource: SessionSource,
-  sessions: SessionListResponse['sessions'],
+  sessions: readonly SessionListResponse['sessions'][number][],
 ): SessionListResponse {
   const catalog = sessionSource.getCatalogStatus?.()
   const warnings = sessionSource.listCatalogWarnings?.() ?? []
@@ -159,18 +168,4 @@ function normalizeLoadRequest(
         path: assertPathInsideHome(body.path, homeDirectory),
       }
     : body
-}
-
-function assertRenderRequest(body: SessionRenderRequest): void {
-  if (!body.session) {
-    throw new ApiError(400, 'invalid_request', 'Render request must include a session payload')
-  }
-
-  if (!body.session.id || !body.session.title || !body.session.source) {
-    throw new ApiError(400, 'invalid_request', 'Session payload is missing required metadata')
-  }
-
-  if (!Array.isArray(body.session.turns)) {
-    throw new ApiError(400, 'invalid_request', 'Session payload must include turns')
-  }
 }

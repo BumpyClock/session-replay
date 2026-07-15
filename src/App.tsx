@@ -89,6 +89,8 @@ function App() {
   const [playbackActive, setPlaybackActive] = useState(false)
   const [playbackSpeedIndex, setPlaybackSpeedIndex] = useState(DEFAULT_PLAYBACK_SPEED_INDEX)
   const pollingRequestInFlight = useRef(false)
+  const sessionLoadController = useRef<AbortController | null>(null)
+  const sessionLoadGeneration = useRef(0)
 
   const browserFilters = useBrowserPrefsStore((state) => state.filters)
   const collapsedProjectIds = useBrowserPrefsStore((state) => state.collapsedProjectIds)
@@ -282,12 +284,23 @@ function App() {
     ensureDraft(loadedSession.id, baseRevision)
   }, [baseRevision, ensureDraft, loadedSession])
 
+  useEffect(() => () => {
+    sessionLoadGeneration.current += 1
+    sessionLoadController.current?.abort()
+  }, [])
+
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
       const nextRef = sessions.find((session) => session.id === sessionId)
       if (!nextRef) {
         return
       }
+
+      const generation = sessionLoadGeneration.current + 1
+      sessionLoadGeneration.current = generation
+      sessionLoadController.current?.abort()
+      const controller = new AbortController()
+      sessionLoadController.current = controller
 
       setSessionError(null)
       setSessionLoading(true)
@@ -297,15 +310,27 @@ function App() {
       setPlaybackActive(false)
       setLoadedSession(null)
       try {
-        const response = await apiClient.loadSession({ path: nextRef.path })
+        const response = await apiClient.loadSession({ path: nextRef.path }, controller.signal)
+        if (generation !== sessionLoadGeneration.current) {
+          return
+        }
         setLoadedSession(response.session)
       } catch (error) {
+        if (
+          generation !== sessionLoadGeneration.current ||
+          (error instanceof Error && error.name === 'AbortError')
+        ) {
+          return
+        }
         const message = error instanceof Error ? error.message : 'Failed to load session'
         setSessionError(message)
       } finally {
-        setSessionLoading(false)
-        if (window.innerWidth < 901) {
-          setBrowserOpen(false)
+        if (generation === sessionLoadGeneration.current) {
+          sessionLoadController.current = null
+          setSessionLoading(false)
+          if (window.innerWidth < 901) {
+            setBrowserOpen(false)
+          }
         }
       }
     },

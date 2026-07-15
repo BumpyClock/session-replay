@@ -15,7 +15,7 @@ const DEFAULT_API_BASE = import.meta.env.DEV ? '/api' : 'http://127.0.0.1:4848'
 export interface SessionReplayApiClient {
   exportSessionDocument(request: SessionRenderRequest, fileName?: string): Promise<string>
   listSessions(): Promise<SessionListResponse>
-  loadSession(request: SessionLoadRequest): Promise<SessionLoadResponse>
+  loadSession(request: SessionLoadRequest, signal?: AbortSignal): Promise<SessionLoadResponse>
   searchSessions(request: SessionSearchRequest): Promise<SessionSearchResponse>
 }
 
@@ -36,11 +36,12 @@ export function createSessionReplayApiClient(
       })
     },
     listSessions: () => fetchJson<SessionListResponse>(`${baseUrl}/api/sessions`),
-    loadSession: (request) =>
+    loadSession: (request, signal) =>
       fetchJson<SessionLoadResponse>(`${baseUrl}/api/load`, {
         body: JSON.stringify(request),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
+        signal,
       }),
     searchSessions: (request) =>
       fetchJson<SessionSearchResponse>(`${baseUrl}/api/search`, {
