@@ -4,10 +4,10 @@ Session Replay is a local web app for discovering agent transcripts, inspecting 
 
 ## Requirements and quick start
 
-- [Bun](https://bun.sh/) for dependency management, development, tests, and builds.
+- [Bun](https://bun.sh/) 1.3.14, pinned in `package.json`, for dependency management, development, tests, and builds.
 
 ```bash
-bun install
+bun install --frozen-lockfile
 bun run dev
 ```
 
@@ -115,6 +115,31 @@ bun run lint
 bun run test
 bun run build
 ```
+
+## Optional local pre-push checks
+
+After preparing Bun 1.3.14 and the frozen install, opt in with
+`bun run hooks:install`. Nothing installs hooks automatically. The installer
+refuses unrelated `core.hooksPath` settings or active default hooks. It sets
+repository-local `core.hooksPath` to `.githooks`; linked worktrees share that
+setting and need these tracked files. Repeating installation is safe.
+
+The hook runs full existing ESLint and whole-project `typecheck` scopes. Full
+scopes intentionally cover shared configs, lockfiles, renames, deletions and
+unknown remote bases without an affected-file detector. It never formats,
+installs dependencies, starts the app, reads live transcripts, or invokes a model.
+No formatter policy is introduced. ESLint warnings retain their existing severity.
+
+Every non-deleted pushed commit, including peeled tags, must equal checked-out
+HEAD. The checkout must be clean, including untracked files. Use a separate clean
+checkout for each different commit in a multi-ref push. Deletion-only pushes do
+not run project checks; empty stdin runs all checks. Failed tools block the push
+with their exit status. No stash or automatic checkout occurs.
+
+`bun run test:hooks` exercises the executable hook and installer in disposable
+Git fixtures with stubbed project commands and no outbound push. It does not
+replace `bun run test` or `bun run build`; run those separately. No CI activation,
+checker/linter replacement, or Vitest isolation change is included.
 
 ## Known limits
 
